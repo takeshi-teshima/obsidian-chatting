@@ -1,118 +1,99 @@
 # Obsidian Chatting
 
-An agentic AI chat plugin for Obsidian. Three providers, mobile-first, no bloat.
+**Chat with your vault. On any device. With the model of your choice.**
 
 <p align="center">
-  <img src="assets/screenshot-mobile.jpeg" alt="Obsidian Chatting on mobile" width="300">
+  <img src="assets/screenshot-mobile.jpeg" alt="Obsidian Chatting on mobile" width="320">
 </p>
 
-> **Author:** Yuxiao (o1xhack) — [GitHub](https://github.com/o1xhack) · [app.o1xhack.com](https://app.o1xhack.com)
->
-> **Upstream:** This project is downstream of [Obsidian Chat](https://github.com/omarshahine/obsidian-chat) by Omar Shahine. We track it as the `upstream` remote and pull improvements from it. See [License](#license) for attribution.
+<p align="center">
+  English ·
+  <a href="docs/i18n/README.zh-CN.md">简体中文</a> ·
+  <a href="docs/i18n/README.zh-TW.md">繁體中文</a> ·
+  <a href="docs/i18n/README.ja.md">日本語</a>
+</p>
 
-## Philosophy
+<p align="center">
+  by <strong>Yuxiao (o1xhack)</strong> ·
+  <a href="https://github.com/o1xhack">GitHub</a> ·
+  <a href="https://app.o1xhack.com">app.o1xhack.com</a>
+</p>
 
-Existing AI plugins for Obsidian are overcomplicated, break on mobile, or require a dozen settings to configure. Obsidian Chatting takes the opposite approach: pick a provider, sign in, start talking. The AI reads your notes, makes edits, creates files, and asks clarifying questions, all through a simple chat interface.
+---
 
-Mobile is a first-class citizen, not an afterthought.
+## Why Obsidian Chatting
+
+Most AI plugins for Obsidian are heavy. They have a dozen settings before you can ask your first question, they break on phones, and they treat the AI as a chatbot rather than an assistant that can act on your notes.
+
+Obsidian Chatting is the opposite:
+
+- **Mobile-first.** Works the same on iOS, Android, and desktop.
+- **Three providers, you pick.** Anthropic API, OpenAI API, or sign in with your ChatGPT account.
+- **Agentic by default.** The assistant reads, edits, creates, and renames notes through 14 vault-native tools — not just chat.
+- **Your secrets stay yours.** API keys and OAuth tokens live in the OS keychain, never in `data.json`, never synced.
 
 ## Providers
 
-| Provider | Default Model | Auth | Features |
-|----------|--------------|------|----------|
-| Anthropic | Claude Sonnet 4.6 | API key | Adaptive thinking, web search, prompt caching |
-| OpenAI | Codex 5.3 | API key | Responses API, reasoning, web search |
-| ChatGPT OAuth | Codex 5.3 | OAuth (Device Code) | **Experimental.** Sign in with your ChatGPT account; routes through the ChatGPT/Codex backend. |
+| Provider | Auth | Default model | Notes |
+|---|---|---|---|
+| **Anthropic** | API key | Claude Sonnet 4.6 | Adaptive thinking, web search, prompt caching. |
+| **OpenAI** | API key | Codex 5.3 | Responses API, reasoning, web search. |
+| **ChatGPT OAuth** *(experimental)* | Sign in with ChatGPT | Codex 5.3 | Use your ChatGPT account instead of an API key. Routes through the ChatGPT/Codex backend; availability and quotas are subject to change. |
 
-> **About ChatGPT OAuth:** This is an experimental provider that lets you skip the OpenAI API key by signing in with your ChatGPT account. It uses ChatGPT's own backend (not `api.openai.com`); availability, quotas, models, and request shapes may change without notice. The OpenAI API Key provider remains the recommended stable path. See [docs/chatgpt-oauth-plan.md](docs/chatgpt-oauth-plan.md) for design notes.
+> **About the experimental provider:** ChatGPT OAuth talks to the ChatGPT/Codex backend (not `api.openai.com`). The OpenAI API Key provider remains the recommended stable path. See [docs/chatgpt-oauth-plan.md](docs/chatgpt-oauth-plan.md) for design notes.
 
-## What the AI can do
+## What it can do for your vault
 
-The chat assistant has 14 tools that map directly to Obsidian's Vault API:
+The assistant has 14 tools wired straight into Obsidian's Vault API:
 
-- **read_document** / **read_file**: Read any note in your vault
-- **edit_document**: Find-and-replace, insert, or replace content
-- **search_vault**: Search filenames and content
-- **create_file**: Create new notes with suggested paths
-- **rename_file**: Rename or move files (updates all links)
-- **delete_file**: Move files to trash
-- **list_files**: Browse vault structure
-- **open_document**: Navigate to a file in the editor
-- **get_properties**: Read YAML frontmatter as structured data
-- **set_properties**: Update frontmatter properties (uses Obsidian's native API)
-- **get_backlinks**: Find all notes that link to a given document
-- **get_current_datetime**: Get the current date and time in the user's locale
-- **ask_user**: Ask you a question when something is ambiguous
+- Read any note (or any file).
+- Edit a note via surgical find-and-replace, insert, or full replace.
+- Search filenames and content.
+- Create new notes with a suggested path.
+- Rename or move files (links update automatically).
+- Move files to trash.
+- Browse vault structure.
+- Open a file in the editor.
+- Read and update YAML frontmatter properties.
+- Find backlinks for any note.
+- Get the current date/time in your locale.
+- Ask you a follow-up question when something is ambiguous.
 
-The AI reads before it edits, prefers surgical find-and-replace over full rewrites, and acts on your confirmations without re-asking.
+It reads before it edits, prefers small surgical changes over rewrites, and acts on your confirmations without re-asking.
 
 ## Selection scope
 
-Select text in a note, right-click, and choose "Send selection to Chat". The selection appears as a pill above the input. The AI works only within that selection, leaving the rest of the document untouched. Dismiss the pill to go back to full-document mode.
+Highlight text in a note, right-click, choose **Send selection to Chat**. The selection becomes a pill above the input, and the assistant works only inside it — leaving the rest of the document untouched.
 
 ## Install
 
-### Via BRAT (recommended while in beta)
+### Via BRAT
 
 1. Install [BRAT](https://github.com/TfTHacker/obsidian42-brat) from Community Plugins.
-2. In BRAT settings, click **Add Beta plugin**.
-3. Enter: `o1xhack/obsidian-chatting`
-4. Enable **Obsidian Chatting** in Community Plugins.
+2. **Add Beta plugin** → enter `o1xhack/obsidian-chatting`.
+3. Enable **Obsidian Chatting** in Community Plugins.
 
-### Manual
-
-1. Download `main.js`, `manifest.json`, and `styles.css` from the latest [release](https://github.com/o1xhack/obsidian-chatting/releases).
-2. Create `<vault>/.obsidian/plugins/obsidian-chatting/`.
-3. Copy the files there.
-4. Enable in Community Plugins.
+That's the only supported install path right now. A Community Plugins listing is on the roadmap.
 
 ## Setup
 
-### Anthropic / OpenAI (API key)
+Open **Settings → Obsidian Chatting**, pick a provider, then:
 
-1. Open **Settings → Obsidian Chatting**.
-2. Pick **Anthropic** or **OpenAI**.
-3. Enter your API key (stored per-provider in your OS keychain via [SecretStorage](https://docs.obsidian.md/plugins/guides/secret-storage), never synced).
-4. Click the refresh icon next to **Model** to load available models.
-5. Open the chat from the ribbon icon, command palette, or context menu.
+- **Anthropic / OpenAI:** paste your API key. The plugin stores it in the OS keychain (via [SecretStorage](https://docs.obsidian.md/plugins/guides/secret-storage)).
+- **ChatGPT OAuth:** click **Connect ChatGPT**. A modal shows a verification URL and a one-time code. Open the URL in any browser, sign in, enter the code, and come back. Tokens auto-refresh; if a refresh ever fails you'll see a clear *"session expired, reconnect"* notice.
 
-### ChatGPT OAuth (experimental)
+That's it. Open the chat from the ribbon icon or the command palette.
 
-1. Open **Settings → Obsidian Chatting**.
-2. Pick **ChatGPT OAuth (Experimental)**.
-3. Click **Connect ChatGPT**. The plugin shows a verification URL and a one-time `user_code`.
-4. Open the URL in any browser, sign in with your ChatGPT account, and enter the code.
-5. Return to Obsidian — the plugin polls for completion and stores the credential in [SecretStorage](https://docs.obsidian.md/plugins/guides/secret-storage).
-6. Open the chat. Tokens auto-refresh; if refresh fails you'll see a clear "session expired, reconnect" notice.
+## Design principles
 
-## Commands
-
-| Command | Description |
-|---------|-------------|
-| Open chat | Open the chat sidebar |
-| Chat about this note | Send the active note to chat (editor required) |
-| Send selection to Chat | Send selected text with scoped context |
-| Copy conversation transcript | Export the full conversation to clipboard |
-| Clear conversation | Reset the chat |
-
-## Context menus
-
-- **File explorer**: Right-click any markdown file → **Chat about this note**.
-- **Editor**: Right-click selected text → **Send selection to Chat**.
-- **Ribbon icon**: Right-click for quick actions menu.
-
-## Design decisions
-
-| Decision | Why |
-|----------|-----|
-| Three providers only | Anthropic + OpenAI for stable use, ChatGPT OAuth as an experimental third option. |
-| No streaming | Obsidian's `requestUrl()` can't expose a streaming body. Required for mobile compatibility. |
-| Device Code Flow for OAuth | No localhost callback server needed → works on mobile Obsidian. |
-| Conversation persistence | Chat history survives Obsidian restarts. Stored locally in `chat-state.json`, never synced. |
-| No vault indexing | Linear search capped at results limit. Avoids mobile memory issues. |
-| Svelte 5 UI | Compiles away to vanilla JS. Reactive state without React's runtime overhead. |
-| Right sidebar on mobile | Slides in from the edge, keeping your document underneath. |
-| Per-device secrets | API keys *and* OAuth credentials live in the OS keychain via [SecretStorage](https://docs.obsidian.md/plugins/guides/secret-storage). Never synced, never in `data.json`. |
+| Principle | What it means |
+|---|---|
+| **Mobile is not an afterthought** | Every change is validated on mobile. No streaming, no Node-only modules, no localhost callbacks. |
+| **Three sane providers, no bloat** | Anthropic + OpenAI for stability, ChatGPT OAuth for users who want to skip the API key. No marketplace of half-broken providers. |
+| **Secrets in the keychain** | API keys and OAuth credentials go through Obsidian SecretStorage. They never land in `data.json`, so they never sync to other devices. |
+| **No vault indexing** | Linear search, capped. Predictable, no background work, no memory pressure on phones. |
+| **Conversation persists** | Chat history survives Obsidian restarts. Stored locally in `chat-state.json`, never synced. |
+| **Right sidebar on mobile** | Slides in from the edge — your document stays visible underneath. |
 
 ## Development
 
@@ -124,24 +105,12 @@ npm run dev    # Watch mode
 npm run build  # Production build
 ```
 
-Symlink into your vault for testing:
+Symlink into a test vault:
 
 ```bash
-ln -s /path/to/obsidian-chatting /path/to/vault/.obsidian/plugins/obsidian-chatting
-```
-
-### Syncing from upstream
-
-This repo tracks [omarshahine/obsidian-chat](https://github.com/omarshahine/obsidian-chat) as `upstream`:
-
-```bash
-git remote -v                       # upstream → omarshahine/obsidian-chat
-git fetch upstream
-git merge upstream/main             # or: git rebase upstream/main
+ln -s "$(pwd)" /path/to/vault/.obsidian/plugins/obsidian-chatting
 ```
 
 ## License
 
-MIT. See [LICENSE](./LICENSE).
-
-This project is downstream of [Obsidian Chat](https://github.com/omarshahine/obsidian-chat) by Omar Shahine, also MIT-licensed. The `LICENSE` file preserves the upstream copyright notice alongside our own.
+[MIT](./LICENSE). Originally derived from [omarshahine/obsidian-chat](https://github.com/omarshahine/obsidian-chat) (also MIT) — the original copyright is preserved in `LICENSE` for attribution. Obsidian Chatting is now an independent project with its own roadmap.
