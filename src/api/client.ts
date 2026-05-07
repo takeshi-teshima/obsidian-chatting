@@ -1,6 +1,7 @@
 import type { ChatSettings, UnifiedMessage, UnifiedToolDef, UnifiedResponse } from "../types";
 import { sendAnthropicMessage } from "./anthropic";
 import { sendOpenAIMessage } from "./openai";
+import { sendChatGPTOAuthMessage } from "./chatgpt-oauth";
 
 /**
  * Dispatches a message to the appropriate provider adapter.
@@ -15,6 +16,9 @@ export async function sendMessage(
   const doSend = () => {
     if (settings.provider === "anthropic") {
       return sendAnthropicMessage(settings, messages, tools, systemPrompt);
+    }
+    if (settings.provider === "chatgpt-oauth") {
+      return sendChatGPTOAuthMessage(settings, messages, tools, systemPrompt);
     }
     return sendOpenAIMessage(settings, messages, tools, systemPrompt);
   };

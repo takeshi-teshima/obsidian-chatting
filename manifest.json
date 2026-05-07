@@ -1,1 +1,11 @@
-{"id":"obsidian-chat","name":"Obsidian Chat","version":"1.2.0","minAppVersion":"1.7.0","description":"Agentic AI chat assistant that reads, edits, and creates notes through natural conversation","author":"Omar Shahine","authorUrl":"https://www.omarshahine.com","isDesktopOnly":false}
+{
+  "id": "obsidian-chatting",
+  "name": "Obsidian Chatting",
+  "version": "1.3.0",
+  "minAppVersion": "1.7.0",
+  "description": "Agentic AI chat assistant that reads, edits, and creates notes through natural conversation. Supports Anthropic, OpenAI, and ChatGPT OAuth (experimental).",
+  "author": "Yuxiao (o1xhack)",
+  "authorUrl": "https://github.com/o1xhack",
+  "fundingUrl": "https://app.o1xhack.com",
+  "isDesktopOnly": false
+}

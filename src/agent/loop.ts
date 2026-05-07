@@ -8,6 +8,7 @@ import type {
 } from "../types";
 import { sendMessage } from "../api/client";
 import { clearOpenAIState } from "../api/openai";
+import { clearChatGPTOAuthState } from "../api/chatgpt-oauth";
 import { TOOL_DEFINITIONS } from "../tools/registry";
 import { executeTool } from "../tools/executor";
 import { buildContext } from "./context";
@@ -26,7 +27,7 @@ function debugLog(app: App, label: string, data: unknown): void {
     const entry = `\n--- ${label} [${timestamp}] ---\n${JSON.stringify(data, null, 2)}\n`;
     // Use the adapter to write outside the vault
     app.vault.adapter.append(
-      ".obsidian/plugins/obsidian-chat/debug.log",
+      ".obsidian/plugins/obsidian-chatting/debug.log",
       entry
     );
   } catch {
@@ -62,6 +63,7 @@ export class AgentLoop {
     this.messages = [];
     this.aborted = false;
     clearOpenAIState();
+    clearChatGPTOAuthState();
   }
 
   /** Export API messages for persistence */

@@ -1,6 +1,8 @@
-import { App, Notice, PluginSettingTab, Setting, requestUrl } from "obsidian";
+import { App, Modal, Notice, PluginSettingTab, Setting, requestUrl } from "obsidian";
 import type ChatPlugin from "./main";
 import type { Provider } from "./types";
+import { CHATGPT_OAUTH_DEFAULT_MODEL } from "./types";
+import type { ChatGPTDeviceAuthorization, PollHandle } from "./auth/chatgptOAuth";
 
 interface ModelOption {
   value: string;
@@ -14,6 +16,11 @@ const FALLBACK_MODELS: Record<string, ModelOption[]> = {
     { value: "claude-haiku-4-5-20251001", label: "Claude Haiku 4.5" },
   ],
   openai: [
+    { value: "gpt-5.3-codex", label: "Codex 5.3" },
+    { value: "gpt-5.4", label: "GPT-5.4" },
+    { value: "gpt-4o", label: "GPT-4o" },
+  ],
+  "chatgpt-oauth": [
     { value: "gpt-5.3-codex", label: "Codex 5.3" },
     { value: "gpt-5.4", label: "GPT-5.4" },
     { value: "gpt-4o", label: "GPT-4o" },
@@ -44,7 +51,7 @@ export class ChatSettingTab extends PluginSettingTab {
   display(): void {
     const { containerEl } = this;
     containerEl.empty();
-    containerEl.createEl("h2", { text: "Obsidian Chat" });
+    containerEl.createEl("h2", { text: "Obsidian Chatting" });
 
     const s = this.plugin.settings;
 
@@ -56,6 +63,7 @@ export class ChatSettingTab extends PluginSettingTab {
         dropdown
           .addOption("anthropic", "Anthropic")
           .addOption("openai", "OpenAI")
+          .addOption("chatgpt-oauth", "ChatGPT OAuth (Experimental)")
           .setValue(s.provider)
           .onChange(async (value) => {
             // Load the new provider's key BEFORE saving,
@@ -63,12 +71,61 @@ export class ChatSettingTab extends PluginSettingTab {
             s.provider = value as Provider;
             s.model = "";
             this.plugin.reloadApiKeyForProvider();
+            // Set a sensible default model for chatgpt-oauth (no API to fetch from)
+            if (s.provider === "chatgpt-oauth" && !s.model) {
+              s.model = CHATGPT_OAUTH_DEFAULT_MODEL;
+            }
             await this.plugin.saveSettings();
             setTimeout(() => this.display(), 10);
           })
       );
 
-    // ─── API Key + Test ─────────────────────────────────────────────
+    // ─── Auth section: API key OR OAuth Connect ───────────────────────
+    if (s.provider === "chatgpt-oauth") {
+      this.renderChatGPTOAuthSection(containerEl);
+    } else {
+      this.renderApiKeySection(containerEl);
+    }
+
+    // ─── Model ────────────────────────────────────────────────────────
+    this.renderModelSection(containerEl);
+
+    // ─── Web search ───────────────────────────────────────────────────
+    new Setting(containerEl)
+      .setName("Web search")
+      .setDesc("Allow the model to search the web when it needs current information")
+      .addToggle((toggle) =>
+        toggle
+          .setValue(s.enableWebSearch)
+          .onChange(async (value) => {
+            s.enableWebSearch = value;
+            await this.plugin.saveSettings();
+          })
+      );
+
+    // ─── Max iterations ───────────────────────────────────────────────
+    new Setting(containerEl)
+      .setName("Max tool iterations")
+      .setDesc("Safety limit for the agent loop (default: 20)")
+      .addText((text) =>
+        text
+          .setPlaceholder("20")
+          .setValue(String(s.maxIterations))
+          .onChange(async (value) => {
+            const n = parseInt(value, 10);
+            if (!isNaN(n) && n > 0 && n <= 100) {
+              s.maxIterations = n;
+              await this.plugin.saveSettings();
+            }
+          })
+      );
+  }
+
+  // ─── API key + test (anthropic / openai) ──────────────────────────────────
+
+  private renderApiKeySection(containerEl: HTMLElement): void {
+    const s = this.plugin.settings;
+
     const apiKeySetting = new Setting(containerEl)
       .setName("API key")
       .setDesc(s.apiKey ? "Key saved" : "Enter your API key to get started")
@@ -117,8 +174,98 @@ export class ChatSettingTab extends PluginSettingTab {
         })
       );
     }
+  }
 
-    // ─── Model ────────────────────────────────────────────────────────
+  // ─── ChatGPT OAuth ────────────────────────────────────────────────────────
+
+  private renderChatGPTOAuthSection(containerEl: HTMLElement): void {
+    const credential = this.plugin.chatgptOAuth.getCredential();
+
+    const warning = containerEl.createEl("div", { cls: "setting-item-description" });
+    warning.style.padding = "0.75em";
+    warning.style.marginBottom = "0.75em";
+    warning.style.border = "1px solid var(--background-modifier-border)";
+    warning.style.borderRadius = "6px";
+    warning.style.background = "var(--background-secondary)";
+    warning.innerHTML =
+      "<strong>Experimental.</strong> ChatGPT OAuth uses your ChatGPT account session " +
+      "to talk to the ChatGPT/Codex backend (not <code>api.openai.com</code>). " +
+      "Availability, quotas, models, and request shapes may change without notice. " +
+      "The OpenAI API Key provider remains the recommended stable option.";
+
+    if (credential) {
+      const account = credential.accountId
+        ? maskAccountId(credential.accountId)
+        : "(no account id)";
+      const expires = new Date(credential.expiresAt).toLocaleString();
+      new Setting(containerEl)
+        .setName("ChatGPT account")
+        .setDesc(`Connected — account ${account}. Token expires ${expires}.`)
+        .addButton((button) =>
+          button
+            .setButtonText("Disconnect")
+            .setWarning()
+            .onClick(async () => {
+              this.plugin.chatgptOAuth.clearCredential();
+              new Notice("ChatGPT OAuth disconnected.");
+              this.display();
+            })
+        )
+        .addButton((button) =>
+          button.setButtonText("Test").onClick(async () => {
+            button.setButtonText("Testing...");
+            button.setDisabled(true);
+            try {
+              const { sendMessage } = await import("./api/client");
+              const response = await sendMessage(
+                this.plugin.settings,
+                [{ role: "user", content: "Say hello in one word." }],
+                [],
+                "You are a test. Respond with one word."
+              );
+              const text = response.content
+                .filter((b) => b.type === "text")
+                .map((b) => b.text)
+                .join("");
+              new Notice(`Connected! Response: "${text || "(no text)"}"`);
+            } catch (e) {
+              const msg = e instanceof Error ? e.message : String(e);
+              new Notice(`Connection test failed: ${msg}`);
+            } finally {
+              button.setButtonText("Test");
+              button.setDisabled(false);
+            }
+          })
+        );
+    } else {
+      new Setting(containerEl)
+        .setName("ChatGPT account")
+        .setDesc("Not connected. Sign in with ChatGPT to use this provider.")
+        .addButton((button) =>
+          button
+            .setButtonText("Connect ChatGPT")
+            .setCta()
+            .onClick(async () => {
+              try {
+                const auth = await this.plugin.chatgptOAuth.beginDeviceAuthorization();
+                const handle = this.plugin.chatgptOAuth.pollDeviceAuthorization(auth);
+                const modal = new ChatGPTDeviceLoginModal(this.app, auth, handle, () => {
+                  this.display();
+                });
+                modal.open();
+              } catch (e) {
+                const msg = e instanceof Error ? e.message : String(e);
+                new Notice(`Failed to start ChatGPT login: ${msg}`);
+              }
+            })
+        );
+    }
+  }
+
+  // ─── Model picker ─────────────────────────────────────────────────────────
+
+  private renderModelSection(containerEl: HTMLElement): void {
+    const s = this.plugin.settings;
     const cached = modelCache.get(s.provider);
     const models = cached || FALLBACK_MODELS[s.provider] || FALLBACK_MODELS.anthropic;
 
@@ -149,8 +296,11 @@ export class ChatSettingTab extends PluginSettingTab {
         });
       });
 
-    // Refresh button
-    if (s.apiKey) {
+    // Refresh button (only providers that support model listing through their auth)
+    const canFetchModels =
+      (s.provider === "anthropic" && !!s.apiKey) ||
+      (s.provider === "openai" && !!s.apiKey);
+    if (canFetchModels) {
       modelSetting.addButton((btn) =>
         btn
           .setIcon("refresh-cw")
@@ -181,7 +331,13 @@ export class ChatSettingTab extends PluginSettingTab {
         .setDesc("Enter the full model identifier")
         .addText((text) =>
           text
-            .setPlaceholder(s.provider === "anthropic" ? "claude-sonnet-4-20250514" : "gpt-4o")
+            .setPlaceholder(
+              s.provider === "anthropic"
+                ? "claude-sonnet-4-20250514"
+                : s.provider === "chatgpt-oauth"
+                  ? CHATGPT_OAUTH_DEFAULT_MODEL
+                  : "gpt-4o",
+            )
             .setValue(s.model)
             .onChange(async (value) => {
               s.model = value.trim();
@@ -189,39 +345,114 @@ export class ChatSettingTab extends PluginSettingTab {
             })
         );
     }
-
-    // ─── Web search ───────────────────────────────────────────────────
-    new Setting(containerEl)
-      .setName("Web search")
-      .setDesc("Allow the model to search the web when it needs current information")
-      .addToggle((toggle) =>
-        toggle
-          .setValue(s.enableWebSearch)
-          .onChange(async (value) => {
-            s.enableWebSearch = value;
-            await this.plugin.saveSettings();
-          })
-      );
-
-    // ─── Max iterations ───────────────────────────────────────────────
-    new Setting(containerEl)
-      .setName("Max tool iterations")
-      .setDesc("Safety limit for the agent loop (default: 20)")
-      .addText((text) =>
-        text
-          .setPlaceholder("20")
-          .setValue(String(s.maxIterations))
-          .onChange(async (value) => {
-            const n = parseInt(value, 10);
-            if (!isNaN(n) && n > 0 && n <= 100) {
-              s.maxIterations = n;
-              await this.plugin.saveSettings();
-            }
-          })
-      );
-
-    // System prompt override removed for simplicity
   }
+}
+
+// ─── Device-flow login modal ────────────────────────────────────────────────
+
+class ChatGPTDeviceLoginModal extends Modal {
+  private cancelled = false;
+
+  constructor(
+    app: App,
+    private readonly authorization: ChatGPTDeviceAuthorization,
+    private readonly handle: PollHandle,
+    private readonly onComplete: () => void,
+  ) {
+    super(app);
+  }
+
+  onOpen(): void {
+    const { contentEl } = this;
+    contentEl.empty();
+    contentEl.createEl("h2", { text: "Connect ChatGPT" });
+
+    contentEl.createEl("p", {
+      text: "1. Open this page in any browser:",
+    });
+    const linkRow = contentEl.createEl("div");
+    linkRow.style.margin = "0.4em 0 0.8em";
+    const link = linkRow.createEl("a", {
+      text: this.authorization.verificationUri,
+      href: this.authorization.verificationUri,
+    });
+    link.setAttr("target", "_blank");
+    link.setAttr("rel", "noopener");
+
+    contentEl.createEl("p", { text: "2. Enter this code on the page:" });
+    const codeRow = contentEl.createEl("div");
+    codeRow.style.display = "flex";
+    codeRow.style.alignItems = "center";
+    codeRow.style.gap = "0.5em";
+    codeRow.style.margin = "0.4em 0 1em";
+
+    const codeBox = codeRow.createEl("code", { text: this.authorization.userCode });
+    codeBox.style.fontSize = "1.4em";
+    codeBox.style.padding = "0.3em 0.6em";
+    codeBox.style.borderRadius = "6px";
+    codeBox.style.background = "var(--background-secondary)";
+    codeBox.style.userSelect = "all";
+
+    const copyBtn = codeRow.createEl("button", { text: "Copy code" });
+    copyBtn.addEventListener("click", () => {
+      navigator.clipboard
+        .writeText(this.authorization.userCode)
+        .then(() => new Notice("Code copied."))
+        .catch(() => new Notice("Failed to copy code."));
+    });
+
+    const status = contentEl.createEl("p", {
+      text: "Waiting for authorization. You can return here after signing in.",
+    });
+    status.style.fontStyle = "italic";
+    status.style.color = "var(--text-muted)";
+
+    const buttons = contentEl.createEl("div");
+    buttons.style.display = "flex";
+    buttons.style.justifyContent = "flex-end";
+    buttons.style.gap = "0.5em";
+
+    const openBtn = buttons.createEl("button", { text: "Open login page" });
+    openBtn.classList.add("mod-cta");
+    openBtn.addEventListener("click", () => {
+      window.open(this.authorization.verificationUri, "_blank");
+    });
+
+    const cancelBtn = buttons.createEl("button", { text: "Cancel" });
+    cancelBtn.addEventListener("click", () => {
+      this.cancelled = true;
+      this.handle.cancel();
+      this.close();
+    });
+
+    // Wait for the poll to finish.
+    this.handle.promise
+      .then(() => {
+        if (this.cancelled) return;
+        new Notice("ChatGPT connected.");
+        this.onComplete();
+        this.close();
+      })
+      .catch((e: unknown) => {
+        if (this.cancelled) return;
+        const msg = e instanceof Error ? e.message : String(e);
+        status.setText(`Login failed: ${msg}`);
+        status.style.color = "var(--text-error)";
+      });
+  }
+
+  onClose(): void {
+    if (!this.cancelled) {
+      // If the user closed via Esc / outside click, treat it as cancel.
+      this.handle.cancel();
+    }
+    this.contentEl.empty();
+  }
+}
+
+function maskAccountId(accountId: string): string {
+  if (accountId.length <= 8) return accountId;
+  return `${accountId.slice(0, 4)}…${accountId.slice(-4)}`;
 }
 
 // ─── Model Fetching (only triggered by explicit refresh button click) ───────
@@ -233,7 +464,11 @@ async function fetchModelsFromAPI(
   if (provider === "anthropic") {
     return fetchAnthropicModels(apiKey);
   }
-  return fetchOpenAIModels(apiKey);
+  if (provider === "openai") {
+    return fetchOpenAIModels(apiKey);
+  }
+  // chatgpt-oauth: no listing endpoint, return fallback list.
+  return FALLBACK_MODELS["chatgpt-oauth"];
 }
 
 async function fetchAnthropicModels(apiKey: string): Promise<ModelOption[]> {

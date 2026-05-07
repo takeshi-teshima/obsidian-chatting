@@ -1,9 +1,10 @@
 // ─── Settings ───────────────────────────────────────────────────────────────
 
-export type Provider = "anthropic" | "openai";
+export type Provider = "anthropic" | "openai" | "chatgpt-oauth";
 
 export interface ChatSettings {
   provider: Provider;
+  /** API key for `anthropic` and `openai`. Empty for `chatgpt-oauth` (which uses SecretStorage credentials). */
   apiKey: string;
   model: string;
   maxIterations: number;
@@ -17,6 +18,9 @@ export const DEFAULT_SETTINGS: ChatSettings = {
   maxIterations: 20,
   enableWebSearch: true,
 };
+
+/** Default model used when the user first switches to the ChatGPT OAuth provider. */
+export const CHATGPT_OAUTH_DEFAULT_MODEL = "gpt-5.3-codex";
 
 // ─── Unified Message Format ─────────────────────────────────────────────────
 

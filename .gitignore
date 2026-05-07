@@ -1,6 +1,47 @@
+# --- upstream defaults ---
 node_modules/
 main.js
 dist/
 *.js.map
 data.json
 debug.log
+
+# --- local-only reference material (never publish) ---
+temp/
+
+# --- editor / OS junk ---
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+Thumbs.db
+
+# --- Obsidian test vault artifacts ---
+.obsidian/
+.hotreload
+
+# --- secrets & local env ---
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+secrets.json
+
+# --- build / cache ---
+.cache/
+.parcel-cache/
+.tsbuildinfo
+coverage/
+
+# --- logs ---
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+*.log
+
+# --- planning notes (private) ---
+NOTES.local.md
+TODO.local.md

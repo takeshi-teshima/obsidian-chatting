@@ -13,16 +13,27 @@ import { DEFAULT_SETTINGS } from "./types";
 import { ChatSettingTab, getModelDisplayName } from "./settings";
 import { ObsidianChatView, VIEW_TYPE_CHAT } from "./ui/chat-view";
 import { AgentLoop } from "./agent/loop";
+import { ChatGPTOAuthStore } from "./auth/chatgptOAuthStore";
+import { ChatGPTOAuthService } from "./auth/chatgptOAuth";
+import { setChatGPTOAuthService } from "./api/chatgpt-oauth";
 
 export default class ChatPlugin extends Plugin {
   settings: ChatSettings = DEFAULT_SETTINGS;
   /** Shared agent loop that persists across view open/close cycles */
   agent!: AgentLoop;
+  /** ChatGPT OAuth service (used by the chatgpt-oauth provider). */
+  chatgptOAuth!: ChatGPTOAuthService;
   /** Chat messages for replaying into the UI when the view reopens */
   chatHistory: Array<{ type: string; text?: string; toolName?: string; toolInput?: Record<string, unknown>; toolResult?: { result: string; isError: boolean } }> = [];
 
   async onload(): Promise<void> {
     await this.loadSettings();
+
+    // Wire ChatGPT OAuth before constructing the agent: the OAuth API client
+    // looks up the service via setChatGPTOAuthService().
+    const oauthStore = new ChatGPTOAuthStore(this.app);
+    this.chatgptOAuth = new ChatGPTOAuthService(oauthStore);
+    setChatGPTOAuthService(this.chatgptOAuth);
 
     this.agent = new AgentLoop(this.app, this.settings);
 
@@ -138,9 +149,28 @@ export default class ChatPlugin extends Plugin {
 
   // ─── Chat operations ────────────────────────────────────────────────
 
+  /**
+   * True if the active provider is configured enough to send a message.
+   * - anthropic / openai: an API key is set.
+   * - chatgpt-oauth: a credential is present in SecretStorage.
+   */
+  private isProviderConfigured(): boolean {
+    if (this.settings.provider === "chatgpt-oauth") {
+      return !!this.chatgptOAuth?.getCredential();
+    }
+    return !!this.settings.apiKey;
+  }
+
+  private notConfiguredMessage(): string {
+    if (this.settings.provider === "chatgpt-oauth") {
+      return "Connect your ChatGPT account in Obsidian Chatting settings.";
+    }
+    return "Please configure your API key in Obsidian Chatting settings.";
+  }
+
   private async openChat(): Promise<void> {
-    if (!this.settings.apiKey) {
-      new Notice("Please configure your API key in Obsidian Chat settings.");
+    if (!this.isProviderConfigured()) {
+      new Notice(this.notConfiguredMessage());
       return;
     }
     await this.activateView();
@@ -148,8 +178,8 @@ export default class ChatPlugin extends Plugin {
 
   /** Open chat and immediately send a message */
   private async openChatWithMessage(message: string): Promise<void> {
-    if (!this.settings.apiKey) {
-      new Notice("Please configure your API key in Obsidian Chat settings.");
+    if (!this.isProviderConfigured()) {
+      new Notice(this.notConfiguredMessage());
       return;
     }
     await this.activateView();
@@ -161,8 +191,8 @@ export default class ChatPlugin extends Plugin {
 
   /** Open chat with a selection scope (shows pill, user types their own question) */
   private async openChatWithSelection(selection: SelectionScope): Promise<void> {
-    if (!this.settings.apiKey) {
-      new Notice("Please configure your API key in Obsidian Chat settings.");
+    if (!this.isProviderConfigured()) {
+      new Notice(this.notConfiguredMessage());
       return;
     }
     await this.activateView();
@@ -253,7 +283,7 @@ export default class ChatPlugin extends Plugin {
         agentMessages: this.agent.exportMessages().slice(-80), // Cap at 80 API messages
       };
       await this.app.vault.adapter.write(
-        ".obsidian/plugins/obsidian-chat/chat-state.json",
+        ".obsidian/plugins/obsidian-chatting/chat-state.json",
         JSON.stringify(state)
       );
     } catch {
@@ -264,7 +294,7 @@ export default class ChatPlugin extends Plugin {
   private async loadChatHistory(): Promise<void> {
     try {
       const raw = await this.app.vault.adapter.read(
-        ".obsidian/plugins/obsidian-chat/chat-state.json"
+        ".obsidian/plugins/obsidian-chatting/chat-state.json"
       );
       const state = JSON.parse(raw);
       if (Array.isArray(state.chatHistory)) {
@@ -314,7 +344,7 @@ export default class ChatPlugin extends Plugin {
 
   private loadApiKey(provider: string): string {
     try {
-      return this.app.secretStorage.getSecret(`obsidian-chat-api-key-${provider}`) || "";
+      return this.app.secretStorage.getSecret(`obsidian-chatting-api-key-${provider}`) || "";
     } catch {
       return "";
     }
@@ -322,7 +352,7 @@ export default class ChatPlugin extends Plugin {
 
   private saveApiKey(provider: string, key: string): void {
     try {
-      this.app.secretStorage.setSecret(`obsidian-chat-api-key-${provider}`, key);
+      this.app.secretStorage.setSecret(`obsidian-chatting-api-key-${provider}`, key);
     } catch {
       // SecretStorage not available
     }
