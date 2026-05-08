@@ -4,14 +4,12 @@
  * Talks to the ChatGPT/Codex Responses-style endpoint using a bearer token
  * obtained via the Device Authorization Flow (see ../auth/chatgptOAuth.ts).
  *
- * Two transport paths, attempted in order:
- *   1. Buffered streaming: send `stream: true`, let Obsidian's `requestUrl()`
- *      buffer the entire SSE response, then parse it client-side. This is
- *      the most reliable path on the Codex backend — that endpoint is built
- *      to stream — and it works on mobile because we never read a streaming
- *      body, only the final buffered text.
- *   2. Non-streaming JSON: if the server rejects `stream: true` with a 4xx,
- *      retry with `stream: false`. Some deployments may prefer this.
+ * Transport: always `stream: true`. The Codex backend rejects `stream:false`
+ * outright with 400 `"Stream must be set to true"`, and the official Codex
+ * CLI / other working OAuth-Codex clients never send anything else either.
+ * Obsidian's `requestUrl()` buffers the entire SSE response before returning,
+ * so we read the final body as text and parse it client-side — no streaming
+ * IO required, which keeps mobile compatibility.
  *
  * Conversation continuity is **client-side**: we always send `store: false`
  * (the Codex backend rejects requests without it) and replay the full
@@ -130,16 +128,13 @@ export async function sendChatGPTOAuthMessage(
     baseBody.tools = apiTools;
   }
 
-  // Try streaming first (Codex's native mode), fall back to non-streaming
-  // only if the server rejects the streaming request as malformed.
-  try {
-    return await sendOnce({ ...baseBody, stream: true }, credential.accessToken, credential.accountId);
-  } catch (e) {
-    if (isBadRequestError(e)) {
-      return sendOnce({ ...baseBody, stream: false }, credential.accessToken, credential.accountId);
-    }
-    throw e;
-  }
+  // Codex backend only accepts streaming requests. We always send
+  // `stream: true` and parse the buffered SSE body client-side.
+  return sendOnce(
+    { ...baseBody, stream: true },
+    credential.accessToken,
+    credential.accountId,
+  );
 }
 
 async function sendOnce(
@@ -180,8 +175,19 @@ async function sendOnce(
   }
 
   if (response.status < 200 || response.status >= 300) {
+    // Codex returns errors as either `{detail: "..."}` (FastAPI-style) or
+    // `{error: {message: "..."}}` (OpenAI-style). Extract whichever is present;
+    // fall back to the raw body so the cause is never lost in translation.
+    const json = response.json as
+      | { error?: { message?: string }; detail?: string | { message?: string } }
+      | undefined;
+    const detailText =
+      typeof json?.detail === "string"
+        ? json.detail
+        : json?.detail?.message;
     const apiMsg =
-      (response.json as { error?: { message?: string } } | undefined)?.error?.message ??
+      detailText ??
+      json?.error?.message ??
       response.text?.slice(0, 300) ??
       `HTTP ${response.status}`;
     const err = new ChatGPTOAuthError(
@@ -276,14 +282,6 @@ function parseSSE(text: string): Array<Record<string, unknown>> {
     }
   }
   return events;
-}
-
-function isBadRequestError(e: unknown): boolean {
-  if (e && typeof e === "object" && "status" in e) {
-    const status = (e as { status?: number }).status;
-    return status === 400 || status === 422;
-  }
-  return false;
 }
 
 // ─── Input building ─────────────────────────────────────────────────────────
