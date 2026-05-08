@@ -32,7 +32,31 @@ import {
 } from "../auth/chatgptOAuth";
 
 const CODEX_RESPONSES_URL = "https://chatgpt.com/backend-api/codex/responses";
-const ORIGINATOR = "obsidian-chatting";
+
+/**
+ * `originator` header value.
+ *
+ * The Codex backend uses this header to identify which client is calling
+ * `/codex/responses`. In practice the value `"opencode"` (the official
+ * OpenAI Codex CLI's identifier) is what the backend allows; custom values
+ * are rejected with the same generic-looking 400s as malformed bodies.
+ *
+ * We send `"opencode"` to mirror what the official Codex CLI and other
+ * working OAuth-Codex clients send. The user is already authenticated with
+ * their own ChatGPT account, so this is purely a client-identity header,
+ * not an auth claim.
+ */
+const ORIGINATOR = "opencode";
+
+/**
+ * `User-Agent` we attach to Codex requests.
+ *
+ * The OpenAI JS SDK that the official Codex CLI uses sends `OpenAI/JS X.Y.Z`.
+ * Obsidian's `requestUrl()` doesn't add an OpenAI-flavored UA on its own,
+ * so we set one explicitly. This is defensive — the backend may or may not
+ * gate on UA, but matching the SDK's shape avoids surprises.
+ */
+const USER_AGENT = "OpenAI/JS 4.x obsidian-chatting/0.1";
 
 // We deliberately do NOT discover Codex models at runtime. The Codex
 // `/codex/models` endpoint either returns the same handful of slugs we
@@ -120,6 +144,11 @@ export async function sendChatGPTOAuthMessage(
     name: t.name,
     description: t.description,
     parameters: t.inputSchema,
+    // Codex backend (and the OpenAI Responses API generally) accepts
+    // `strict` on function tools. Setting `false` matches what the
+    // official Codex CLI / other working OAuth-Codex clients send and
+    // avoids unintended structured-output validation on free-form tools.
+    strict: false,
   }));
   if (settings.enableWebSearch) {
     apiTools.push({ type: "web_search_preview" });
@@ -146,6 +175,7 @@ async function sendOnce(
     Authorization: `Bearer ${accessToken}`,
     "Content-Type": "application/json",
     Accept: "text/event-stream, application/json",
+    "User-Agent": USER_AGENT,
     originator: ORIGINATOR,
   };
   if (accountId) {
