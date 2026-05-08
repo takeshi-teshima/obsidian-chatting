@@ -211,11 +211,19 @@ async function sendOnce(
 
   if (response.status < 200 || response.status >= 300) {
     // Codex returns errors as either `{detail: "..."}` (FastAPI-style) or
-    // `{error: {message: "..."}}` (OpenAI-style). Extract whichever is present;
-    // fall back to the raw body so the cause is never lost in translation.
-    const json = response.json as
+    // `{error: {message: "..."}}` (OpenAI-style). Extract whichever is
+    // present; fall back to the raw body so the cause is never lost.
+    // The .json access is wrapped in try/catch because iOS Obsidian's
+    // lazy `response.json` getter throws on any non-JSON body — see the
+    // long comment in parseResponseBody().
+    let json:
       | { error?: { message?: string }; detail?: string | { message?: string } }
       | undefined;
+    try {
+      json = response.json as typeof json;
+    } catch {
+      json = undefined;
+    }
     const detailText =
       typeof json?.detail === "string"
         ? json.detail
@@ -243,10 +251,25 @@ function parseResponseBody(response: {
   text?: string;
   json?: unknown;
 }): Record<string, unknown> {
-  if (response.json && typeof response.json === "object") {
-    const obj = response.json as Record<string, unknown>;
-    // If the JSON parser already gave us the final response, use it.
-    if (obj.output || obj.id) return obj;
+  // On iOS Obsidian, `requestUrl()` returns a `response.json` that is a
+  // lazy getter calling `JSON.parse(text)` under the hood. When the body
+  // is SSE (which is always true for `/codex/responses`), accessing
+  // `.json` throws a SyntaxError like
+  //   `JSON Parse error: Unexpected identifier "event"`
+  // because the text starts with `event: ...`. Desktop Electron returns
+  // undefined / null instead of throwing, but mobile is stricter. We
+  // wrap the access in try/catch so we always cleanly fall through to
+  // the SSE text parser below.
+  let jsonObj: Record<string, unknown> | undefined;
+  try {
+    if (response.json && typeof response.json === "object") {
+      jsonObj = response.json as Record<string, unknown>;
+    }
+  } catch {
+    jsonObj = undefined;
+  }
+  if (jsonObj && (jsonObj.output || jsonObj.id)) {
+    return jsonObj;
   }
 
   const text = response.text ?? "";
