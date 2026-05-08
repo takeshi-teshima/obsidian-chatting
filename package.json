@@ -18,7 +18,9 @@
     "dev": "node esbuild.config.mjs",
     "build": "node esbuild.config.mjs production",
     "svelte-check": "svelte-check --tsconfig tsconfig.json",
-    "release": "./scripts/release.sh"
+    "release": "./scripts/release.sh",
+    "codex:login": "node test/codex-login.mjs",
+    "codex:smoke": "node test/codex-smoke.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
