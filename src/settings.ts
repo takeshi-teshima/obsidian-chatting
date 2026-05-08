@@ -69,7 +69,7 @@ export class ChatSettingTab extends PluginSettingTab {
         dropdown
           .addOption("anthropic", "Anthropic")
           .addOption("openai", "OpenAI")
-          .addOption("chatgpt-oauth", "ChatGPT OAuth (Experimental)")
+          .addOption("chatgpt-oauth", "ChatGPT OAuth")
           .setValue(s.provider)
           .onChange(async (value) => {
             // Load the new provider's key BEFORE saving,
@@ -187,17 +187,17 @@ export class ChatSettingTab extends PluginSettingTab {
   private renderChatGPTOAuthSection(containerEl: HTMLElement): void {
     const credential = this.plugin.chatgptOAuth.getCredential();
 
-    const warning = containerEl.createEl("div", { cls: "setting-item-description" });
-    warning.style.padding = "0.75em";
-    warning.style.marginBottom = "0.75em";
-    warning.style.border = "1px solid var(--background-modifier-border)";
-    warning.style.borderRadius = "6px";
-    warning.style.background = "var(--background-secondary)";
-    warning.innerHTML =
-      "<strong>Experimental.</strong> ChatGPT OAuth uses your ChatGPT account session " +
-      "to talk to the ChatGPT/Codex backend (not <code>api.openai.com</code>). " +
-      "Availability, quotas, models, and request shapes may change without notice. " +
-      "The OpenAI API Key provider remains the recommended stable option.";
+    const explainer = containerEl.createEl("div", { cls: "setting-item-description" });
+    explainer.style.padding = "0.75em";
+    explainer.style.marginBottom = "0.75em";
+    explainer.style.border = "1px solid var(--background-modifier-border)";
+    explainer.style.borderRadius = "6px";
+    explainer.style.background = "var(--background-secondary)";
+    explainer.innerHTML =
+      "Sign in with your ChatGPT account instead of using an OpenAI API key. " +
+      "Requests are routed through the ChatGPT/Codex backend (not <code>api.openai.com</code>) " +
+      "and require an active ChatGPT plan with Codex access. " +
+      "The available models mirror the Codex CLI catalog.";
 
     if (credential) {
       const account = credential.accountId

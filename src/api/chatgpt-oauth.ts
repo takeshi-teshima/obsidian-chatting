@@ -1,5 +1,5 @@
 /**
- * ChatGPT OAuth API client (Experimental).
+ * ChatGPT OAuth API client.
  *
  * Talks to the ChatGPT/Codex Responses-style endpoint using a bearer token
  * obtained via the Device Authorization Flow (see ../auth/chatgptOAuth.ts).
@@ -234,7 +234,7 @@ async function sendOnce(
       response.text?.slice(0, 300) ??
       `HTTP ${response.status}`;
     const err = new ChatGPTOAuthError(
-      `ChatGPT OAuth request failed (${response.status}): ${apiMsg}. This experimental provider may not support the selected model or request format. Try reconnecting or switch to OpenAI API Key.`,
+      `ChatGPT OAuth request failed (${response.status}): ${apiMsg}. The Codex backend may not accept the selected model or request format. Try reconnecting, picking a different model, or switching to OpenAI API Key.`,
     );
     (err as Error & { status?: number }).status = response.status;
     throw err;
