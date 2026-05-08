@@ -1,7 +1,7 @@
 {
   "id": "obsidian-chatting",
   "name": "Obsidian Chatting",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "minAppVersion": "1.7.0",
   "description": "Agentic AI chat assistant that reads, edits, and creates notes through natural conversation. Supports Anthropic, OpenAI, and ChatGPT OAuth (experimental).",
   "author": "Yuxiao (o1xhack)",

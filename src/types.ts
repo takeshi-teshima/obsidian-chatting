@@ -19,8 +19,16 @@ export const DEFAULT_SETTINGS: ChatSettings = {
   enableWebSearch: true,
 };
 
-/** Default model used when the user first switches to the ChatGPT OAuth provider. */
-export const CHATGPT_OAUTH_DEFAULT_MODEL = "gpt-5.3-codex";
+/**
+ * Default model for the ChatGPT OAuth provider.
+ *
+ * Mirrors the priority-0 entry in the official Codex CLI's bundled
+ * `models.json`. The Codex backend rejects models that aren't on this short
+ * approved list (the error message shape is `"The 'X' model is not supported
+ * when using Codex with a ChatGPT account."`), so we deliberately don't
+ * default to anything outside it.
+ */
+export const CHATGPT_OAUTH_DEFAULT_MODEL = "gpt-5.5";
 
 // ─── Unified Message Format ─────────────────────────────────────────────────
 

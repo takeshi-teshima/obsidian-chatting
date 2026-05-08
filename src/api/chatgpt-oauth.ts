@@ -37,19 +37,19 @@ const CODEX_RESPONSES_URL = "https://chatgpt.com/backend-api/codex/responses";
 const ORIGINATOR = "obsidian-chatting";
 
 /**
- * Candidate URLs to try when listing available models.
+ * Canonical Codex model-catalog endpoint.
  *
- * The ChatGPT/Codex backend isn't a documented public API, so there's no
- * canonical model-discovery endpoint we can rely on. We probe the two
- * paths most likely to mirror upstream OpenAI conventions, in order:
- *   1. /backend-api/codex/models — sibling of /responses
- *   2. /backend-api/models      — one level up
- * If neither responds, the caller falls back to a hardcoded list.
+ * This is the same `/models` endpoint the official OpenAI Codex CLI hits
+ * (see openai/codex `codex-rs/model-provider/src/models_endpoint.rs`). It
+ * returns slugs the Codex `/responses` endpoint actually accepts, in the
+ * documented `ModelInfo` schema.
+ *
+ * We deliberately do NOT fall back to `chatgpt.com/backend-api/models` —
+ * that is the chat.com UI catalog and uses dash-separated slugs like
+ * `gpt-5-5` that the Codex backend rejects with HTTP 400
+ * `"The 'gpt-5-5' model is not supported when using Codex with a ChatGPT account."`.
  */
-const CODEX_MODELS_CANDIDATE_URLS = [
-  "https://chatgpt.com/backend-api/codex/models",
-  "https://chatgpt.com/backend-api/models",
-];
+const CODEX_MODELS_URL = "https://chatgpt.com/backend-api/codex/models";
 
 export interface ChatGPTOAuthModel {
   id: string;
@@ -114,73 +114,85 @@ export async function fetchChatGPTOAuthModels(): Promise<ChatGPTOAuthModel[]> {
     headers["ChatGPT-Account-Id"] = credential.accountId;
   }
 
-  const failures: string[] = [];
-
-  for (const url of CODEX_MODELS_CANDIDATE_URLS) {
-    let response;
-    try {
-      response = await requestUrl({ url, method: "GET", headers, throw: false });
-    } catch (e) {
-      failures.push(`${url}: ${e instanceof Error ? e.message : String(e)}`);
-      continue;
-    }
-
-    if (response.status < 200 || response.status >= 300) {
-      failures.push(`${url}: HTTP ${response.status}`);
-      continue;
-    }
-
-    const parsed = parseModelListPayload(response.json);
-    if (parsed.length > 0) {
-      return parsed;
-    }
-    failures.push(`${url}: HTTP 200 but empty model list`);
+  let response;
+  try {
+    response = await requestUrl({
+      url: CODEX_MODELS_URL,
+      method: "GET",
+      headers,
+      throw: false,
+    });
+  } catch (e) {
+    throw new ChatGPTOAuthError(
+      `Codex /models request failed: ${e instanceof Error ? e.message : String(e)}`,
+    );
   }
 
-  throw new ChatGPTOAuthError(
-    `Could not fetch a model list from the ChatGPT/Codex backend. ` +
-      `It may not expose a public model-listing endpoint, or the experimental ` +
-      `provider may be temporarily unavailable. Tried: ${failures.join("; ")}`,
-  );
+  if (response.status < 200 || response.status >= 300) {
+    throw new ChatGPTOAuthError(
+      `Codex /models returned HTTP ${response.status}. The ChatGPT/Codex ` +
+        `backend may not expose a model-listing endpoint to your account ` +
+        `tier, or the experimental provider is temporarily unavailable.`,
+    );
+  }
+
+  const parsed = parseCodexModelsResponse(response.json);
+  if (parsed.length === 0) {
+    throw new ChatGPTOAuthError(
+      "Codex /models returned an empty list.",
+    );
+  }
+  return parsed;
 }
 
-function parseModelListPayload(payload: unknown): ChatGPTOAuthModel[] {
+/**
+ * Parse the Codex backend's `/models` response into a UI-ready model list.
+ *
+ * Schema follows openai/codex `ModelInfo` (codex-rs/protocol/src/openai_models.rs):
+ *
+ *     { models: [
+ *         { slug, display_name, priority, visibility: "list"|"hide"|"none", ... }
+ *       ] }
+ *
+ * Filtering / sorting:
+ *   - Drop entries whose `visibility` is `"hide"` or `"none"` (Codex CLI only
+ *     surfaces `list`-visibility models in its picker).
+ *   - Drop entries whose slug is empty.
+ *   - Sort ascending by `priority` (lower = recommended first), ties broken
+ *     by display name.
+ */
+function parseCodexModelsResponse(payload: unknown): ChatGPTOAuthModel[] {
   if (!payload || typeof payload !== "object") return [];
-  const obj = payload as Record<string, unknown>;
-
-  // Accepts the most likely response shapes:
-  //   { data: [{id, display_name?}] }   — OpenAI-style
-  //   { models: [{id|name, label?}] }   — Codex-style guess
-  //   [{id, ...}]                       — bare array
-  const raw: Array<Record<string, unknown>> = Array.isArray(payload)
-    ? (payload as Array<Record<string, unknown>>)
-    : Array.isArray(obj.data)
-      ? (obj.data as Array<Record<string, unknown>>)
-      : Array.isArray(obj.models)
-        ? (obj.models as Array<Record<string, unknown>>)
-        : [];
+  const root = payload as Record<string, unknown>;
+  const raw: Array<Record<string, unknown>> = Array.isArray(root.models)
+    ? (root.models as Array<Record<string, unknown>>)
+    : Array.isArray(payload as unknown)
+      ? (payload as Array<Record<string, unknown>>)
+      : [];
 
   const seen = new Set<string>();
-  const out: ChatGPTOAuthModel[] = [];
+  const accepted: Array<{ id: string; label: string; priority: number }> = [];
+
   for (const m of raw) {
-    const id =
-      (typeof m.id === "string" && m.id) ||
-      (typeof m.name === "string" && m.name) ||
-      (typeof m.slug === "string" && m.slug) ||
-      "";
-    if (!id || seen.has(id)) continue;
+    const slug = typeof m.slug === "string" ? m.slug : "";
+    if (!slug || seen.has(slug)) continue;
+
+    const visibility = typeof m.visibility === "string" ? m.visibility : "list";
+    if (visibility !== "list") continue;
+
     const label =
-      (typeof m.display_name === "string" && m.display_name) ||
-      (typeof m.label === "string" && m.label) ||
-      (typeof m.title === "string" && m.title) ||
-      id;
-    seen.add(id);
-    out.push({ id, label });
+      (typeof m.display_name === "string" && m.display_name) || slug;
+    const priority =
+      typeof m.priority === "number" && Number.isFinite(m.priority)
+        ? m.priority
+        : 999;
+
+    seen.add(slug);
+    accepted.push({ id: slug, label, priority });
   }
 
-  // Stable order: alphabetical by id, but with the default model first if present.
-  out.sort((a, b) => a.id.localeCompare(b.id));
-  return out;
+  accepted.sort((a, b) => a.priority - b.priority || a.label.localeCompare(b.label));
+  return accepted.map(({ id, label }) => ({ id, label }));
 }
 
 export async function sendChatGPTOAuthMessage(
