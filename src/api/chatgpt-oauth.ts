@@ -233,10 +233,19 @@ export async function sendChatGPTOAuthMessage(
     // Required by the Codex backend; omitting it returns
     // 400 {"detail":"Store must be set to false"}.
     store: false,
+    // Match the request shape used by other working Codex-via-OAuth clients
+    // (verified against the OpenAI Codex CLI and external references). These
+    // fields aren't strictly documented as required, but Codex's response
+    // pipeline expects them and at least one is required for reasoning models.
+    parallel_tool_calls: true,
   };
 
   if (/^o\d/.test(model) || /^gpt-5/.test(model) || /codex/i.test(model)) {
-    baseBody.reasoning = { effort: "medium" };
+    baseBody.reasoning = { effort: "medium", summary: "auto" };
+    // Codex requires the encrypted reasoning payload to be threaded through
+    // the request when reasoning is enabled. Without this, the backend
+    // sometimes returns 400 on follow-up turns.
+    baseBody.include = ["reasoning.encrypted_content"];
   }
 
   const apiTools: Record<string, unknown>[] = tools.map((t) => ({
