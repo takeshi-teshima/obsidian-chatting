@@ -36,25 +36,14 @@ import {
 const CODEX_RESPONSES_URL = "https://chatgpt.com/backend-api/codex/responses";
 const ORIGINATOR = "obsidian-chatting";
 
-/**
- * Canonical Codex model-catalog endpoint.
- *
- * This is the same `/models` endpoint the official OpenAI Codex CLI hits
- * (see openai/codex `codex-rs/model-provider/src/models_endpoint.rs`). It
- * returns slugs the Codex `/responses` endpoint actually accepts, in the
- * documented `ModelInfo` schema.
- *
- * We deliberately do NOT fall back to `chatgpt.com/backend-api/models` —
- * that is the chat.com UI catalog and uses dash-separated slugs like
- * `gpt-5-5` that the Codex backend rejects with HTTP 400
- * `"The 'gpt-5-5' model is not supported when using Codex with a ChatGPT account."`.
- */
-const CODEX_MODELS_URL = "https://chatgpt.com/backend-api/codex/models";
-
-export interface ChatGPTOAuthModel {
-  id: string;
-  label: string;
-}
+// We deliberately do NOT discover Codex models at runtime. The Codex
+// `/codex/models` endpoint either returns the same handful of slugs we
+// already hardcode in settings.ts FALLBACK_MODELS["chatgpt-oauth"], or
+// returns the chat.com UI catalog (dash-form slugs like `gpt-5-5` that
+// `/codex/responses` rejects with HTTP 400). Either way, live discovery
+// adds no value over the hardcoded list, which is mirrored from the
+// official OpenAI Codex CLI's bundled `models.json`. Users can still pick
+// "Custom..." in the settings dropdown to type any slug.
 
 /** Held by main.ts; injected via setChatGPTOAuthService(). */
 let oauthService: ChatGPTOAuthService | null = null;
@@ -73,126 +62,6 @@ export function setChatGPTOAuthService(service: ChatGPTOAuthService | null): voi
  */
 export function clearChatGPTOAuthState(): void {
   /* no-op: history lives entirely in AgentLoop.messages */
-}
-
-/**
- * Best-effort fetch of available models for the ChatGPT OAuth provider.
- *
- * Probes the candidate URLs above using the current OAuth credential.
- * Returns a deduplicated, alphabetically-stable list on success. Throws a
- * descriptive ChatGPTOAuthError if every candidate fails — the caller is
- * expected to catch this and fall back to a hardcoded model list rather
- * than surface a hard failure.
- */
-export async function fetchChatGPTOAuthModels(): Promise<ChatGPTOAuthModel[]> {
-  if (!oauthService) {
-    throw new ChatGPTOAuthError(
-      "ChatGPT OAuth service is not initialized. Reload the plugin.",
-    );
-  }
-  let credential;
-  try {
-    credential = await oauthService.getUsableCredential();
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
-    throw new ChatGPTOAuthError(
-      `ChatGPT OAuth session expired and refresh failed. (${msg})`,
-    );
-  }
-  if (!credential) {
-    throw new ChatGPTOAuthError(
-      "ChatGPT OAuth is not connected. Connect ChatGPT first.",
-    );
-  }
-
-  const headers: Record<string, string> = {
-    Authorization: `Bearer ${credential.accessToken}`,
-    Accept: "application/json",
-    originator: ORIGINATOR,
-  };
-  if (credential.accountId) {
-    headers["ChatGPT-Account-Id"] = credential.accountId;
-  }
-
-  let response;
-  try {
-    response = await requestUrl({
-      url: CODEX_MODELS_URL,
-      method: "GET",
-      headers,
-      throw: false,
-    });
-  } catch (e) {
-    throw new ChatGPTOAuthError(
-      `Codex /models request failed: ${e instanceof Error ? e.message : String(e)}`,
-    );
-  }
-
-  if (response.status < 200 || response.status >= 300) {
-    throw new ChatGPTOAuthError(
-      `Codex /models returned HTTP ${response.status}. The ChatGPT/Codex ` +
-        `backend may not expose a model-listing endpoint to your account ` +
-        `tier, or the experimental provider is temporarily unavailable.`,
-    );
-  }
-
-  const parsed = parseCodexModelsResponse(response.json);
-  if (parsed.length === 0) {
-    throw new ChatGPTOAuthError(
-      "Codex /models returned an empty list.",
-    );
-  }
-  return parsed;
-}
-
-/**
- * Parse the Codex backend's `/models` response into a UI-ready model list.
- *
- * Schema follows openai/codex `ModelInfo` (codex-rs/protocol/src/openai_models.rs):
- *
- *     { models: [
- *         { slug, display_name, priority, visibility: "list"|"hide"|"none", ... }
- *       ] }
- *
- * Filtering / sorting:
- *   - Drop entries whose `visibility` is `"hide"` or `"none"` (Codex CLI only
- *     surfaces `list`-visibility models in its picker).
- *   - Drop entries whose slug is empty.
- *   - Sort ascending by `priority` (lower = recommended first), ties broken
- *     by display name.
- */
-function parseCodexModelsResponse(payload: unknown): ChatGPTOAuthModel[] {
-  if (!payload || typeof payload !== "object") return [];
-  const root = payload as Record<string, unknown>;
-  const raw: Array<Record<string, unknown>> = Array.isArray(root.models)
-    ? (root.models as Array<Record<string, unknown>>)
-    : Array.isArray(payload as unknown)
-      ? (payload as Array<Record<string, unknown>>)
-      : [];
-
-  const seen = new Set<string>();
-  const accepted: Array<{ id: string; label: string; priority: number }> = [];
-
-  for (const m of raw) {
-    const slug = typeof m.slug === "string" ? m.slug : "";
-    if (!slug || seen.has(slug)) continue;
-
-    const visibility = typeof m.visibility === "string" ? m.visibility : "list";
-    if (visibility !== "list") continue;
-
-    const label =
-      (typeof m.display_name === "string" && m.display_name) || slug;
-    const priority =
-      typeof m.priority === "number" && Number.isFinite(m.priority)
-        ? m.priority
-        : 999;
-
-    seen.add(slug);
-    accepted.push({ id: slug, label, priority });
-  }
-
-  accepted.sort((a, b) => a.priority - b.priority || a.label.localeCompare(b.label));
-  return accepted.map(({ id, label }) => ({ id, label }));
 }
 
 export async function sendChatGPTOAuthMessage(

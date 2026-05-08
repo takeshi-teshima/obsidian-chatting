@@ -302,23 +302,22 @@ export class ChatSettingTab extends PluginSettingTab {
         });
       });
 
-    // Refresh button — visible whenever the active provider has working
-    // credentials. For ChatGPT OAuth this is best-effort: the Codex backend
-    // doesn't document a public /models endpoint, so a failed fetch falls
-    // back to defaults rather than surfacing as a fatal error.
+    // Refresh button — only for providers that ship a meaningful model
+    // catalog endpoint behind their auth.
+    //
+    // chatgpt-oauth is intentionally excluded. The Codex backend either
+    // returns the same five slugs we already hardcode, or returns the
+    // chat.com UI catalog (dash-form slugs the /responses endpoint then
+    // rejects). A live fetch adds zero value and creates confusing failure
+    // modes. Users who need a non-default Codex slug can pick "Custom...".
     const canFetchModels =
       (s.provider === "anthropic" && !!s.apiKey) ||
-      (s.provider === "openai" && !!s.apiKey) ||
-      (s.provider === "chatgpt-oauth" && !!this.plugin.chatgptOAuth.getCredential());
+      (s.provider === "openai" && !!s.apiKey);
     if (canFetchModels) {
       modelSetting.addButton((btn) =>
         btn
           .setIcon("refresh-cw")
-          .setTooltip(
-            s.provider === "chatgpt-oauth"
-              ? "Try fetching models from the ChatGPT backend (best-effort)"
-              : "Fetch models from API",
-          )
+          .setTooltip("Fetch models from API")
           .onClick(async () => {
             btn.setDisabled(true);
             try {
@@ -332,14 +331,7 @@ export class ChatSettingTab extends PluginSettingTab {
               this.display();
             } catch (e) {
               const msg = e instanceof Error ? e.message : String(e);
-              if (s.provider === "chatgpt-oauth") {
-                new Notice(
-                  `ChatGPT model list unavailable. Using defaults. (${msg})`,
-                  6000,
-                );
-              } else {
-                new Notice(`Failed to fetch models: ${msg}`);
-              }
+              new Notice(`Failed to fetch models: ${msg}`);
             }
           })
       );
@@ -488,14 +480,9 @@ async function fetchModelsFromAPI(
   if (provider === "openai") {
     return fetchOpenAIModels(apiKey);
   }
-  if (provider === "chatgpt-oauth") {
-    // Lazy import keeps the OAuth provider from being loaded when not needed.
-    const { fetchChatGPTOAuthModels } = await import("./api/chatgpt-oauth");
-    const models = await fetchChatGPTOAuthModels();
-    return models.length > 0
-      ? models.map((m) => ({ value: m.id, label: m.label }))
-      : FALLBACK_MODELS["chatgpt-oauth"];
-  }
+  // chatgpt-oauth never reaches here — the refresh button is hidden for it.
+  // We return the bundled list for type-safety, in case a future caller
+  // bypasses the UI gate.
   return FALLBACK_MODELS["chatgpt-oauth"];
 }
 
