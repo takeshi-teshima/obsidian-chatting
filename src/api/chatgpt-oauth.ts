@@ -13,9 +13,11 @@
  *   2. Non-streaming JSON: if the server rejects `stream: true` with a 4xx,
  *      retry with `stream: false`. Some deployments may prefer this.
  *
- * Conversation continuity uses `previous_response_id`, identical to the
- * upstream OpenAI provider. We store the last response id locally; on
- * `clearChatGPTOAuthState()` (called by AgentLoop.clear()) we drop it.
+ * Conversation continuity is **client-side**: we always send `store: false`
+ * (the Codex backend rejects requests without it) and replay the full
+ * conversation history into `input` every turn. We deliberately do NOT use
+ * `previous_response_id` — it requires the server to persist the previous
+ * response, which is incompatible with `store: false`.
  */
 import { requestUrl } from "obsidian";
 import type {
@@ -34,7 +36,25 @@ import {
 const CODEX_RESPONSES_URL = "https://chatgpt.com/backend-api/codex/responses";
 const ORIGINATOR = "obsidian-chatting";
 
-let previousResponseId: string | null = null;
+/**
+ * Candidate URLs to try when listing available models.
+ *
+ * The ChatGPT/Codex backend isn't a documented public API, so there's no
+ * canonical model-discovery endpoint we can rely on. We probe the two
+ * paths most likely to mirror upstream OpenAI conventions, in order:
+ *   1. /backend-api/codex/models — sibling of /responses
+ *   2. /backend-api/models      — one level up
+ * If neither responds, the caller falls back to a hardcoded list.
+ */
+const CODEX_MODELS_CANDIDATE_URLS = [
+  "https://chatgpt.com/backend-api/codex/models",
+  "https://chatgpt.com/backend-api/models",
+];
+
+export interface ChatGPTOAuthModel {
+  id: string;
+  label: string;
+}
 
 /** Held by main.ts; injected via setChatGPTOAuthService(). */
 let oauthService: ChatGPTOAuthService | null = null;
@@ -43,9 +63,124 @@ export function setChatGPTOAuthService(service: ChatGPTOAuthService | null): voi
   oauthService = service;
 }
 
-/** Clear the conversation chain (call when the user clears chat). */
+/**
+ * Reset any per-conversation client state (called from AgentLoop.clear()).
+ *
+ * The Codex backend forces us into stateless mode, so we don't actually
+ * keep any cross-turn server identifiers. This function exists so the
+ * agent loop can call it uniformly alongside the OpenAI provider's reset
+ * — and so we have one place to add new state if we ever introduce it.
+ */
 export function clearChatGPTOAuthState(): void {
-  previousResponseId = null;
+  /* no-op: history lives entirely in AgentLoop.messages */
+}
+
+/**
+ * Best-effort fetch of available models for the ChatGPT OAuth provider.
+ *
+ * Probes the candidate URLs above using the current OAuth credential.
+ * Returns a deduplicated, alphabetically-stable list on success. Throws a
+ * descriptive ChatGPTOAuthError if every candidate fails — the caller is
+ * expected to catch this and fall back to a hardcoded model list rather
+ * than surface a hard failure.
+ */
+export async function fetchChatGPTOAuthModels(): Promise<ChatGPTOAuthModel[]> {
+  if (!oauthService) {
+    throw new ChatGPTOAuthError(
+      "ChatGPT OAuth service is not initialized. Reload the plugin.",
+    );
+  }
+  let credential;
+  try {
+    credential = await oauthService.getUsableCredential();
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    throw new ChatGPTOAuthError(
+      `ChatGPT OAuth session expired and refresh failed. (${msg})`,
+    );
+  }
+  if (!credential) {
+    throw new ChatGPTOAuthError(
+      "ChatGPT OAuth is not connected. Connect ChatGPT first.",
+    );
+  }
+
+  const headers: Record<string, string> = {
+    Authorization: `Bearer ${credential.accessToken}`,
+    Accept: "application/json",
+    originator: ORIGINATOR,
+  };
+  if (credential.accountId) {
+    headers["ChatGPT-Account-Id"] = credential.accountId;
+  }
+
+  const failures: string[] = [];
+
+  for (const url of CODEX_MODELS_CANDIDATE_URLS) {
+    let response;
+    try {
+      response = await requestUrl({ url, method: "GET", headers, throw: false });
+    } catch (e) {
+      failures.push(`${url}: ${e instanceof Error ? e.message : String(e)}`);
+      continue;
+    }
+
+    if (response.status < 200 || response.status >= 300) {
+      failures.push(`${url}: HTTP ${response.status}`);
+      continue;
+    }
+
+    const parsed = parseModelListPayload(response.json);
+    if (parsed.length > 0) {
+      return parsed;
+    }
+    failures.push(`${url}: HTTP 200 but empty model list`);
+  }
+
+  throw new ChatGPTOAuthError(
+    `Could not fetch a model list from the ChatGPT/Codex backend. ` +
+      `It may not expose a public model-listing endpoint, or the experimental ` +
+      `provider may be temporarily unavailable. Tried: ${failures.join("; ")}`,
+  );
+}
+
+function parseModelListPayload(payload: unknown): ChatGPTOAuthModel[] {
+  if (!payload || typeof payload !== "object") return [];
+  const obj = payload as Record<string, unknown>;
+
+  // Accepts the most likely response shapes:
+  //   { data: [{id, display_name?}] }   — OpenAI-style
+  //   { models: [{id|name, label?}] }   — Codex-style guess
+  //   [{id, ...}]                       — bare array
+  const raw: Array<Record<string, unknown>> = Array.isArray(payload)
+    ? (payload as Array<Record<string, unknown>>)
+    : Array.isArray(obj.data)
+      ? (obj.data as Array<Record<string, unknown>>)
+      : Array.isArray(obj.models)
+        ? (obj.models as Array<Record<string, unknown>>)
+        : [];
+
+  const seen = new Set<string>();
+  const out: ChatGPTOAuthModel[] = [];
+  for (const m of raw) {
+    const id =
+      (typeof m.id === "string" && m.id) ||
+      (typeof m.name === "string" && m.name) ||
+      (typeof m.slug === "string" && m.slug) ||
+      "";
+    if (!id || seen.has(id)) continue;
+    const label =
+      (typeof m.display_name === "string" && m.display_name) ||
+      (typeof m.label === "string" && m.label) ||
+      (typeof m.title === "string" && m.title) ||
+      id;
+    seen.add(id);
+    out.push({ id, label });
+  }
+
+  // Stable order: alphabetical by id, but with the default model first if present.
+  out.sort((a, b) => a.id.localeCompare(b.id));
+  return out;
 }
 
 export async function sendChatGPTOAuthMessage(
@@ -77,17 +212,16 @@ export async function sendChatGPTOAuthMessage(
 
   const model = settings.model || CHATGPT_OAUTH_DEFAULT_MODEL;
 
-  const input = buildCurrentTurnInput(messages, systemPrompt);
-
   const baseBody: Record<string, unknown> = {
     model,
-    input,
+    // Replay the full conversation each turn — Codex's `store:false` mode
+    // makes server-side `previous_response_id` chaining unavailable.
+    input: buildFullHistoryInput(messages),
     instructions: systemPrompt,
+    // Required by the Codex backend; omitting it returns
+    // 400 {"detail":"Store must be set to false"}.
+    store: false,
   };
-
-  if (previousResponseId) {
-    baseBody.previous_response_id = previousResponseId;
-  }
 
   if (/^o\d/.test(model) || /^gpt-5/.test(model) || /codex/i.test(model)) {
     baseBody.reasoning = { effort: "medium" };
@@ -171,7 +305,6 @@ async function sendOnce(
   //   - JSON object (non-streaming or `response.completed` already aggregated)
   //   - SSE text body (streaming, buffered by requestUrl)
   const data = parseResponseBody(response);
-  previousResponseId = (data.id as string | undefined) ?? previousResponseId;
   return fromResponsesOutput(data);
 }
 
@@ -263,67 +396,53 @@ function isBadRequestError(e: unknown): boolean {
   return false;
 }
 
-// ─── Input building (mirrors openai.ts) ─────────────────────────────────────
+// ─── Input building ─────────────────────────────────────────────────────────
 
-function buildCurrentTurnInput(
+/**
+ * Convert the agent loop's full message history into Responses-API input
+ * items. The Codex backend rejects `previous_response_id` (because we must
+ * send `store:false`), so every request carries the entire conversation.
+ *
+ * Encoding rules:
+ *   - string content        → { type:"message", role, content }
+ *   - text block            → { type:"message", role, content:text }
+ *   - tool_use block        → { type:"function_call", call_id, name, arguments }
+ *   - tool_result block     → { type:"function_call_output", call_id, output }
+ *
+ * The system prompt is sent separately via the `instructions` field, so we
+ * never include it here.
+ */
+function buildFullHistoryInput(
   messages: UnifiedMessage[],
-  systemPrompt: string,
 ): Array<Record<string, unknown>> {
   const items: Array<Record<string, unknown>> = [];
 
-  if (!previousResponseId) {
-    items.push({
-      type: "message",
-      role: "developer",
-      content: systemPrompt,
-    });
+  for (const msg of messages) {
+    const role = msg.role === "assistant" ? "assistant" : "user";
 
-    for (const msg of messages) {
-      if (typeof msg.content === "string") {
+    if (typeof msg.content === "string") {
+      items.push({ type: "message", role, content: msg.content });
+      continue;
+    }
+
+    for (const block of msg.content) {
+      if (block.type === "text" && block.text) {
+        items.push({ type: "message", role, content: block.text });
+      } else if (block.type === "tool_use" && block.name && block.id) {
         items.push({
-          type: "message",
-          role: msg.role === "assistant" ? "assistant" : "user",
-          content: msg.content,
+          type: "function_call",
+          call_id: block.id,
+          name: block.name,
+          arguments: JSON.stringify(block.input ?? {}),
+        });
+      } else if (block.type === "tool_result" && block.tool_use_id) {
+        items.push({
+          type: "function_call_output",
+          call_id: block.tool_use_id,
+          output: block.content ?? "",
         });
       }
     }
-    return items;
-  }
-
-  const lastMsg = messages[messages.length - 1];
-  if (!lastMsg) return items;
-
-  if (typeof lastMsg.content === "string") {
-    items.push({
-      type: "message",
-      role: "user",
-      content: lastMsg.content,
-    });
-    return items;
-  }
-
-  const toolResults = lastMsg.content.filter((b) => b.type === "tool_result");
-  if (toolResults.length > 0) {
-    for (const tr of toolResults) {
-      items.push({
-        type: "function_call_output",
-        call_id: tr.tool_use_id,
-        output: tr.content || "",
-      });
-    }
-    return items;
-  }
-
-  const text = lastMsg.content
-    .filter((b) => b.type === "text")
-    .map((b) => b.text)
-    .join("");
-  if (text) {
-    items.push({
-      type: "message",
-      role: lastMsg.role === "assistant" ? "assistant" : "user",
-      content: text,
-    });
   }
 
   return items;

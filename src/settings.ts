@@ -296,15 +296,23 @@ export class ChatSettingTab extends PluginSettingTab {
         });
       });
 
-    // Refresh button (only providers that support model listing through their auth)
+    // Refresh button — visible whenever the active provider has working
+    // credentials. For ChatGPT OAuth this is best-effort: the Codex backend
+    // doesn't document a public /models endpoint, so a failed fetch falls
+    // back to defaults rather than surfacing as a fatal error.
     const canFetchModels =
       (s.provider === "anthropic" && !!s.apiKey) ||
-      (s.provider === "openai" && !!s.apiKey);
+      (s.provider === "openai" && !!s.apiKey) ||
+      (s.provider === "chatgpt-oauth" && !!this.plugin.chatgptOAuth.getCredential());
     if (canFetchModels) {
       modelSetting.addButton((btn) =>
         btn
           .setIcon("refresh-cw")
-          .setTooltip("Fetch models from API")
+          .setTooltip(
+            s.provider === "chatgpt-oauth"
+              ? "Try fetching models from the ChatGPT backend (best-effort)"
+              : "Fetch models from API",
+          )
           .onClick(async () => {
             btn.setDisabled(true);
             try {
@@ -318,7 +326,14 @@ export class ChatSettingTab extends PluginSettingTab {
               this.display();
             } catch (e) {
               const msg = e instanceof Error ? e.message : String(e);
-              new Notice(`Failed to fetch models: ${msg}`);
+              if (s.provider === "chatgpt-oauth") {
+                new Notice(
+                  `ChatGPT model list unavailable. Using defaults. (${msg})`,
+                  6000,
+                );
+              } else {
+                new Notice(`Failed to fetch models: ${msg}`);
+              }
             }
           })
       );
@@ -467,7 +482,14 @@ async function fetchModelsFromAPI(
   if (provider === "openai") {
     return fetchOpenAIModels(apiKey);
   }
-  // chatgpt-oauth: no listing endpoint, return fallback list.
+  if (provider === "chatgpt-oauth") {
+    // Lazy import keeps the OAuth provider from being loaded when not needed.
+    const { fetchChatGPTOAuthModels } = await import("./api/chatgpt-oauth");
+    const models = await fetchChatGPTOAuthModels();
+    return models.length > 0
+      ? models.map((m) => ({ value: m.id, label: m.label }))
+      : FALLBACK_MODELS["chatgpt-oauth"];
+  }
   return FALLBACK_MODELS["chatgpt-oauth"];
 }
 
