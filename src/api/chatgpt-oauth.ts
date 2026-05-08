@@ -150,9 +150,12 @@ export async function sendChatGPTOAuthMessage(
     // avoids unintended structured-output validation on free-form tools.
     strict: false,
   }));
-  if (settings.enableWebSearch) {
-    apiTools.push({ type: "web_search_preview" });
-  }
+  // Note: we deliberately do NOT push `web_search_preview` here, even when
+  // `settings.enableWebSearch` is true. The Codex backend rejects every
+  // hosted tool with HTTP 400 `"Unsupported tool type: <name>"` — it's a
+  // coding-agent surface, not a general assistant surface, so only
+  // function tools are supported. The Web search toggle still applies to
+  // the Anthropic and OpenAI API-key providers as before.
   if (apiTools.length > 0) {
     baseBody.tools = apiTools;
   }

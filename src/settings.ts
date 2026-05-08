@@ -97,17 +97,25 @@ export class ChatSettingTab extends PluginSettingTab {
     this.renderModelSection(containerEl);
 
     // ─── Web search ───────────────────────────────────────────────────
-    new Setting(containerEl)
+    // The Codex backend (used by chatgpt-oauth) doesn't support hosted
+    // tools, so we hide / annotate the toggle accordingly. Anthropic and
+    // OpenAI keep full web-search support.
+    const webSearchSetting = new Setting(containerEl)
       .setName("Web search")
-      .setDesc("Allow the model to search the web when it needs current information")
-      .addToggle((toggle) =>
-        toggle
-          .setValue(s.enableWebSearch)
-          .onChange(async (value) => {
-            s.enableWebSearch = value;
-            await this.plugin.saveSettings();
-          })
+      .setDesc(
+        s.provider === "chatgpt-oauth"
+          ? "Not available with ChatGPT OAuth — the Codex backend doesn't support hosted tools. Switch to the Anthropic or OpenAI provider to use web search."
+          : "Allow the model to search the web when it needs current information",
       );
+    webSearchSetting.addToggle((toggle) =>
+      toggle
+        .setValue(s.enableWebSearch && s.provider !== "chatgpt-oauth")
+        .setDisabled(s.provider === "chatgpt-oauth")
+        .onChange(async (value) => {
+          s.enableWebSearch = value;
+          await this.plugin.saveSettings();
+        }),
+    );
 
     // ─── Max iterations ───────────────────────────────────────────────
     new Setting(containerEl)
