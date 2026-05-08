@@ -1,15 +1,17 @@
 /* ═══════════════════════════════════════════════════════════════════════════
-   Obsidian Chat — Global styles (outside Svelte component scope)
+   Obsidian Chatting — Global styles (outside Svelte component scope)
    Component styles live in ChatContainer.svelte with scoped CSS.
+   All class names use the `ochatting-` prefix to avoid colliding with
+   upstream Obsidian Chat (`ochat-`) when both plugins are installed.
    ═══════════════════════════════════════════════════════════════════════════ */
 
-.ochat-view-container {
+.ochatting-view-container {
   height: 100%;
   display: flex;
   flex-direction: column;
 }
 
 /* Desktop sidebar min-width */
-.workspace-leaf-content[data-type="ochat-view"] {
+.workspace-leaf-content[data-type="ochatting-view"] {
   min-width: 280px;
 }

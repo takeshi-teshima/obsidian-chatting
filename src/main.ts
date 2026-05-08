@@ -46,7 +46,7 @@ export default class ChatPlugin extends Plugin {
     this.registerView(VIEW_TYPE_CHAT, (leaf) => new ObsidianChatView(leaf, this));
 
     // Ribbon icon (users can hide; commands are the primary access)
-    this.addRibbonIcon("message-circle", "Open Obsidian Chat", (evt) => {
+    this.addRibbonIcon("message-circle", "Open Obsidian Chatting", (evt) => {
       if (evt.type === "contextmenu" || (evt instanceof MouseEvent && evt.button === 2)) {
         // Right-click: show menu with options
         const menu = new Menu();

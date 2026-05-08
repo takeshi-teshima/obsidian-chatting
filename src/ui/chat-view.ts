@@ -5,10 +5,10 @@ import ChatContainer from "./ChatContainer.svelte";
 import type { ToolResult, SelectionScope } from "../types";
 import { getModelDisplayName } from "../settings";
 
-export const VIEW_TYPE_CHAT = "ochat-view";
+export const VIEW_TYPE_CHAT = "ochatting-view";
 
 /**
- * Chat view for Obsidian Chat.
+ * Chat view for Obsidian Chatting.
  * Desktop: right sidebar. Mobile: right sidebar (slides in from edge).
  * Uses the plugin's shared AgentLoop and chatHistory so conversations
  * survive the view being closed and reopened (e.g. sidebar toggle).
@@ -28,7 +28,9 @@ export class ObsidianChatView extends ItemView {
   }
 
   getDisplayText(): string {
-    return "Chat";
+    // Distinct from upstream "Chat" tab so users running both plugins
+    // side-by-side can tell the workspace tabs apart.
+    return "Chatting";
   }
 
   getIcon(): string {
@@ -38,7 +40,7 @@ export class ObsidianChatView extends ItemView {
   async onOpen(): Promise<void> {
     const container = this.contentEl;
     container.empty();
-    container.addClass("ochat-view-container");
+    container.addClass("ochatting-view-container");
 
     this.chatContainer = mount(ChatContainer, {
       target: container,

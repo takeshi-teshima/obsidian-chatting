@@ -209,65 +209,65 @@
   }
 </script>
 
-<div class="ochat-container">
+<div class="ochatting-container">
   <!-- Header -->
-  <div class="ochat-header">
-    <div class="ochat-header-left">
-      <span class="ochat-header-title">Chat</span>
-      <span class="ochat-header-model">{displayModel || "No model"}</span>
+  <div class="ochatting-header">
+    <div class="ochatting-header-left">
+      <span class="ochatting-header-title">Chat</span>
+      <span class="ochatting-header-model">{displayModel || "No model"}</span>
     </div>
-    <button class="ochat-clear-btn" onclick={onClear}>Clear</button>
+    <button class="ochatting-clear-btn" onclick={onClear}>Clear</button>
   </div>
 
   <!-- Messages -->
-  <div class="ochat-messages" bind:this={messagesEl}>
+  <div class="ochatting-messages" bind:this={messagesEl}>
     {#each messages as msg (msg.id)}
       {#if msg.type === "user"}
-        <div class="ochat-msg ochat-user-msg">
-          <div class="ochat-msg-content">{msg.text}</div>
+        <div class="ochatting-msg ochatting-user-msg">
+          <div class="ochatting-msg-content">{msg.text}</div>
         </div>
 
       {:else if msg.type === "assistant"}
-        <div class="ochat-msg ochat-assistant-msg">
-          <div class="ochat-msg-content" use:markdown={msg.text ?? ""}></div>
+        <div class="ochatting-msg ochatting-assistant-msg">
+          <div class="ochatting-msg-content" use:markdown={msg.text ?? ""}></div>
         </div>
 
       {:else if msg.type === "tool-call"}
-        <div class="ochat-tool-call">
-          <div class="ochat-tool-status">
-            <span class="ochat-spinner"></span>
-            <span class="ochat-tool-name">{formatToolName(msg.toolName ?? "")}</span>
+        <div class="ochatting-tool-call">
+          <div class="ochatting-tool-status">
+            <span class="ochatting-spinner"></span>
+            <span class="ochatting-tool-name">{formatToolName(msg.toolName ?? "")}</span>
           </div>
-          <details class="ochat-tool-details">
+          <details class="ochatting-tool-details">
             <summary>Parameters</summary>
-            <pre class="ochat-tool-json">{JSON.stringify(msg.toolInput, null, 2)}</pre>
+            <pre class="ochatting-tool-json">{JSON.stringify(msg.toolInput, null, 2)}</pre>
           </details>
         </div>
 
       {:else if msg.type === "tool-result"}
-        <div class="ochat-tool-call">
-          <div class="ochat-tool-status">
-            <span class={msg.toolResult?.isError ? "ochat-tool-error" : "ochat-tool-success"}>
+        <div class="ochatting-tool-call">
+          <div class="ochatting-tool-status">
+            <span class={msg.toolResult?.isError ? "ochatting-tool-error" : "ochatting-tool-success"}>
               {msg.toolResult?.isError ? "\u2718" : "\u2714"}
             </span>
-            <span class="ochat-tool-name">{formatToolName(msg.toolName ?? "")}</span>
+            <span class="ochatting-tool-name">{formatToolName(msg.toolName ?? "")}</span>
           </div>
-          <details class="ochat-tool-details">
+          <details class="ochatting-tool-details">
             <summary>{msg.toolResult?.isError ? "Error" : "Result"}</summary>
-            <pre class="ochat-tool-json">{truncate(msg.toolResult?.result ?? "", 2000)}</pre>
+            <pre class="ochatting-tool-json">{truncate(msg.toolResult?.result ?? "", 2000)}</pre>
           </details>
         </div>
 
       {:else if msg.type === "error"}
-        <div class="ochat-msg ochat-error-msg">
-          <div class="ochat-msg-content">{msg.text}</div>
+        <div class="ochatting-msg ochatting-error-msg">
+          <div class="ochatting-msg-content">{msg.text}</div>
         </div>
 
       {:else if msg.type === "thinking"}
-        <div class="ochat-thinking">
-          <span class="ochat-dot"></span>
-          <span class="ochat-dot"></span>
-          <span class="ochat-dot"></span>
+        <div class="ochatting-thinking">
+          <span class="ochatting-dot"></span>
+          <span class="ochatting-dot"></span>
+          <span class="ochatting-dot"></span>
         </div>
       {/if}
     {/each}
@@ -275,13 +275,13 @@
 
   <!-- Selection pill -->
   {#if selection}
-    <div class="ochat-selection-pill">
-      <div class="ochat-selection-content">
-        <span class="ochat-selection-label">Selection from {selection.filePath.split("/").pop()}</span>
-        <span class="ochat-selection-preview">{selection.text.substring(0, 80)}{selection.text.length > 80 ? "..." : ""}</span>
+    <div class="ochatting-selection-pill">
+      <div class="ochatting-selection-content">
+        <span class="ochatting-selection-label">Selection from {selection.filePath.split("/").pop()}</span>
+        <span class="ochatting-selection-preview">{selection.text.substring(0, 80)}{selection.text.length > 80 ? "..." : ""}</span>
       </div>
       <button
-        class="ochat-selection-dismiss"
+        class="ochatting-selection-dismiss"
         onclick={() => selection = null}
         aria-label="Remove selection"
       >
@@ -291,9 +291,9 @@
   {/if}
 
   <!-- Input bar -->
-  <div class="ochat-input-bar">
+  <div class="ochatting-input-bar">
     <textarea
-      class="ochat-input"
+      class="ochatting-input"
       bind:this={textareaEl}
       bind:value={inputText}
       {placeholder}
@@ -304,7 +304,7 @@
     ></textarea>
     {#if inputEnabled}
       <button
-        class="ochat-send-btn"
+        class="ochatting-send-btn"
         onclick={handleSend}
         aria-label="Send message"
       >
@@ -312,7 +312,7 @@
       </button>
     {:else}
       <button
-        class="ochat-send-btn ochat-stop-btn"
+        class="ochatting-send-btn ochatting-stop-btn"
         onclick={onStop}
         aria-label="Stop generation"
       >
@@ -324,7 +324,7 @@
 
 <style>
   /* ─── Container ─────────────────────────────────────────────────────── */
-  .ochat-container {
+  .ochatting-container {
     display: flex;
     flex-direction: column;
     height: 100%;
@@ -332,7 +332,7 @@
   }
 
   /* ─── Header ────────────────────────────────────────────────────────── */
-  .ochat-header {
+  .ochatting-header {
     display: flex;
     align-items: center;
     justify-content: space-between;
@@ -341,24 +341,24 @@
     flex-shrink: 0;
   }
 
-  .ochat-header-left {
+  .ochatting-header-left {
     display: flex;
     align-items: baseline;
     gap: 8px;
   }
 
-  .ochat-header-title {
+  .ochatting-header-title {
     font-weight: var(--font-weight-bold, 600);
     font-size: var(--font-ui-medium);
     color: var(--text-normal);
   }
 
-  .ochat-header-model {
+  .ochatting-header-model {
     font-size: var(--font-ui-smaller);
     color: var(--text-muted);
   }
 
-  .ochat-clear-btn {
+  .ochatting-clear-btn {
     font-size: var(--font-ui-smaller);
     color: var(--text-muted);
     background: none;
@@ -368,13 +368,13 @@
     border-radius: var(--radius-s);
   }
 
-  .ochat-clear-btn:hover {
+  .ochatting-clear-btn:hover {
     background: var(--background-modifier-hover);
     color: var(--text-normal);
   }
 
   /* ─── Messages ──────────────────────────────────────────────────────── */
-  .ochat-messages {
+  .ochatting-messages {
     flex: 1 1 0;
     overflow-y: auto;
     overscroll-behavior: contain;
@@ -386,7 +386,7 @@
     user-select: text;
   }
 
-  .ochat-msg {
+  .ochatting-msg {
     max-width: 90%;
     padding: 8px 12px;
     border-radius: var(--radius-m);
@@ -396,29 +396,29 @@
     user-select: text;
   }
 
-  .ochat-user-msg {
+  .ochatting-user-msg {
     align-self: flex-end;
     background: var(--interactive-accent);
     color: var(--text-on-accent);
     border-bottom-right-radius: var(--radius-s);
   }
 
-  .ochat-assistant-msg {
+  .ochatting-assistant-msg {
     align-self: flex-start;
     background: var(--background-secondary);
     color: var(--text-normal);
     border-bottom-left-radius: var(--radius-s);
   }
 
-  .ochat-assistant-msg :global(p:first-child) {
+  .ochatting-assistant-msg :global(p:first-child) {
     margin-top: 0;
   }
 
-  .ochat-assistant-msg :global(p:last-child) {
+  .ochatting-assistant-msg :global(p:last-child) {
     margin-bottom: 0;
   }
 
-  .ochat-error-msg {
+  .ochatting-error-msg {
     align-self: flex-start;
     background: var(--background-secondary);
     color: var(--text-error);
@@ -428,7 +428,7 @@
   }
 
   /* ─── Tool Calls ────────────────────────────────────────────────────── */
-  .ochat-tool-call {
+  .ochatting-tool-call {
     align-self: flex-start;
     padding: 6px 10px;
     background: var(--background-secondary-alt);
@@ -438,35 +438,35 @@
     max-width: 90%;
   }
 
-  .ochat-tool-status {
+  .ochatting-tool-status {
     display: flex;
     align-items: center;
     gap: 6px;
   }
 
-  .ochat-tool-name {
+  .ochatting-tool-name {
     font-weight: 500;
   }
 
-  .ochat-tool-success {
+  .ochatting-tool-success {
     color: var(--text-success);
   }
 
-  .ochat-tool-error {
+  .ochatting-tool-error {
     color: var(--text-error);
   }
 
-  .ochat-tool-details {
+  .ochatting-tool-details {
     margin-top: 4px;
   }
 
-  .ochat-tool-details summary {
+  .ochatting-tool-details summary {
     cursor: pointer;
     color: var(--text-faint);
     font-size: var(--font-ui-smaller);
   }
 
-  .ochat-tool-json {
+  .ochatting-tool-json {
     margin: 4px 0 0;
     padding: 6px 8px;
     background: var(--background-primary);
@@ -479,51 +479,51 @@
   }
 
   /* ─── Spinner ───────────────────────────────────────────────────────── */
-  .ochat-spinner {
+  .ochatting-spinner {
     display: inline-block;
     width: 12px;
     height: 12px;
     border: 2px solid var(--text-faint);
     border-top-color: var(--interactive-accent);
     border-radius: 50%;
-    animation: ochat-spin 0.6s linear infinite;
+    animation: ochatting-spin 0.6s linear infinite;
   }
 
-  @keyframes ochat-spin {
+  @keyframes ochatting-spin {
     to { transform: rotate(360deg); }
   }
 
   /* ─── Thinking Dots ─────────────────────────────────────────────────── */
-  .ochat-thinking {
+  .ochatting-thinking {
     align-self: flex-start;
     display: flex;
     gap: 4px;
     padding: 8px 12px;
   }
 
-  .ochat-dot {
+  .ochatting-dot {
     width: 8px;
     height: 8px;
     background: var(--text-faint);
     border-radius: 50%;
-    animation: ochat-pulse 1.4s ease-in-out infinite;
+    animation: ochatting-pulse 1.4s ease-in-out infinite;
   }
 
-  .ochat-dot:nth-child(2) {
+  .ochatting-dot:nth-child(2) {
     animation-delay: 0.2s;
   }
 
-  .ochat-dot:nth-child(3) {
+  .ochatting-dot:nth-child(3) {
     animation-delay: 0.4s;
   }
 
-  @keyframes ochat-pulse {
+  @keyframes ochatting-pulse {
     0%, 80%, 100% { opacity: 0.3; transform: scale(0.8); }
     40% { opacity: 1; transform: scale(1); }
   }
 
   /* ─── Input Bar ─────────────────────────────────────────────────────── */
-  .ochat-input-bar {
+  .ochatting-input-bar {
     display: flex;
     align-items: flex-end;
     gap: 8px;
@@ -534,7 +534,7 @@
     flex-shrink: 0;
   }
 
-  .ochat-input {
+  .ochatting-input {
     flex: 1;
     resize: none;
     border: 1.5px solid var(--background-modifier-border-hover, var(--background-modifier-border));
@@ -550,17 +550,17 @@
     box-shadow: none;
   }
 
-  .ochat-input:focus {
+  .ochatting-input:focus {
     outline: none;
     border-color: var(--interactive-accent);
     box-shadow: none;
   }
 
-  .ochat-input:disabled {
+  .ochatting-input:disabled {
     opacity: 0.5;
   }
 
-  .ochat-send-btn {
+  .ochatting-send-btn {
     width: 34px;
     height: 34px;
     min-width: 34px;
@@ -579,26 +579,26 @@
     margin-bottom: 1px;
   }
 
-  .ochat-send-btn:hover {
+  .ochatting-send-btn:hover {
     background-color: var(--interactive-accent-hover);
   }
 
-  .ochat-send-btn:disabled {
+  .ochatting-send-btn:disabled {
     opacity: 0.4;
     cursor: not-allowed;
   }
 
-  .ochat-stop-btn {
+  .ochatting-stop-btn {
     background-color: var(--text-error);
   }
 
-  .ochat-stop-btn:hover {
+  .ochatting-stop-btn:hover {
     background-color: var(--text-error);
     opacity: 0.85;
   }
 
   /* ─── Selection Pill ─────────────────────────────────────────────────── */
-  .ochat-selection-pill {
+  .ochatting-selection-pill {
     display: flex;
     align-items: center;
     gap: 8px;
@@ -610,7 +610,7 @@
     flex-shrink: 0;
   }
 
-  .ochat-selection-content {
+  .ochatting-selection-content {
     flex: 1;
     min-width: 0;
     display: flex;
@@ -618,13 +618,13 @@
     gap: 2px;
   }
 
-  .ochat-selection-label {
+  .ochatting-selection-label {
     font-size: var(--font-ui-smaller);
     color: var(--text-muted);
     font-weight: 500;
   }
 
-  .ochat-selection-preview {
+  .ochatting-selection-preview {
     font-size: var(--font-ui-smaller);
     color: var(--text-faint);
     white-space: nowrap;
@@ -632,7 +632,7 @@
     text-overflow: ellipsis;
   }
 
-  .ochat-selection-dismiss {
+  .ochatting-selection-dismiss {
     flex-shrink: 0;
     width: 20px;
     height: 20px;
@@ -647,30 +647,30 @@
     justify-content: center;
   }
 
-  .ochat-selection-dismiss:hover {
+  .ochatting-selection-dismiss:hover {
     background: var(--background-modifier-border);
     color: var(--text-normal);
   }
 
   /* ─── Responsive ────────────────────────────────────────────────────── */
   @media (max-width: 768px) {
-    .ochat-msg {
+    .ochatting-msg {
       max-width: 95%;
     }
 
-    .ochat-input-bar {
+    .ochatting-input-bar {
       gap: 10px;
       padding: 10px 12px;
       padding-bottom: calc(10px + env(safe-area-inset-bottom, 0px));
     }
 
-    .ochat-input {
+    .ochatting-input {
       font-size: 16px; /* Prevents iOS zoom on focus */
       padding: 10px 16px;
       border-radius: 22px;
     }
 
-    .ochat-send-btn {
+    .ochatting-send-btn {
       width: 36px;
       height: 36px;
       min-width: 36px;
