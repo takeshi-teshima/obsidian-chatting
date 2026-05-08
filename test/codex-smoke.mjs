@@ -210,8 +210,18 @@ async function main() {
     process.exit(1);
   }
 
-  const output = completed.response?.output ?? [];
-  console.log(`\n─── response.completed (${output.length} output items) ───`);
+  // Codex's `response.completed` has an empty `response.output` — the
+  // actual items arrive incrementally as `response.output_item.done`
+  // events. Collect those (deduped by output_index, keeping the latest)
+  // to reconstruct the final output array.
+  const itemByIndex = new Map();
+  for (const e of events) {
+    if (e.type === "response.output_item.done" && e.item) {
+      itemByIndex.set(e.output_index ?? e.item.id, e.item);
+    }
+  }
+  const output = Array.from(itemByIndex.values());
+  console.log(`\n─── reconstructed output (${output.length} items) ───`);
   for (const item of output) {
     if (item.type === "message" && Array.isArray(item.content)) {
       for (const part of item.content) {

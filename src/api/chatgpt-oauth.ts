@@ -277,37 +277,59 @@ function parseResponseBody(response: {
     throw new ChatGPTOAuthError("ChatGPT OAuth response was empty.");
   }
 
-  // SSE: lines beginning with `data: ` are JSON events. Find the
-  // `response.completed` event (or `response.incomplete` as a fallback) and
-  // return its `response` payload, which has the same shape as the
-  // non-streaming Responses API result.
+  // SSE: lines beginning with `data: ` are JSON events. We need to do
+  // **client-side reconstruction** of the response, because Codex's
+  // `response.completed` event always has `response.output: []` —
+  // unlike the non-streaming Responses API on `api.openai.com`, the
+  // Codex backend never aggregates the final output server-side.
+  //
+  // Strategy:
+  //   1. Walk every event in order.
+  //   2. Collect each `response.output_item.done` item (deduplicated by
+  //      `output_index`, latest write wins). These are the FINAL forms
+  //      of the output items — they include the full `content` array
+  //      for messages and the complete `arguments` string for tool
+  //      calls.
+  //   3. Use `response.completed` only as the "stream finished" signal
+  //      and to extract the response id and usage stats.
+  //   4. Surface `response.failed` / `error` events as exceptions.
   const events = parseSSE(text);
-  let lastResponse: Record<string, unknown> | null = null;
+  const itemByIndex = new Map<string | number, Record<string, unknown>>();
+  let completedResponse: Record<string, unknown> | null = null;
   let failureMessage: string | null = null;
 
   for (const evt of events) {
     const type = evt.type as string | undefined;
-    if (type === "response.completed" && evt.response) {
-      return evt.response as Record<string, unknown>;
-    }
-    if (type === "response.incomplete" && evt.response) {
-      lastResponse = evt.response as Record<string, unknown>;
-    }
-    if (type === "response.failed") {
+    if (type === "response.output_item.done") {
+      const item = evt.item as Record<string, unknown> | undefined;
+      if (item) {
+        const key =
+          (evt.output_index as string | number | undefined) ??
+          (item.id as string | undefined) ??
+          itemByIndex.size;
+        itemByIndex.set(key, item);
+      }
+    } else if (type === "response.completed") {
+      completedResponse = (evt.response as Record<string, unknown>) ?? {};
+    } else if (type === "response.incomplete") {
+      completedResponse = (evt.response as Record<string, unknown>) ?? {};
+    } else if (type === "response.failed") {
       const err = (evt.response as { error?: { message?: string } })?.error;
       failureMessage = err?.message ?? "ChatGPT OAuth response failed";
-    }
-    if (type === "error" && typeof evt.message === "string") {
+    } else if (type === "error" && typeof evt.message === "string") {
       failureMessage = evt.message;
     }
   }
 
-  if (lastResponse) return lastResponse;
   if (failureMessage) throw new ChatGPTOAuthError(failureMessage);
 
-  // If we got JSON but it wasn't recognizable, fall through with what we have.
-  if (response.json && typeof response.json === "object") {
-    return response.json as Record<string, unknown>;
+  if (completedResponse || itemByIndex.size > 0) {
+    // Synthesize a Responses-API-shaped object from the streamed pieces.
+    const synthesized: Record<string, unknown> = {
+      ...(completedResponse ?? {}),
+      output: Array.from(itemByIndex.values()),
+    };
+    return synthesized;
   }
 
   throw new ChatGPTOAuthError(
