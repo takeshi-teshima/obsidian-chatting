@@ -1,19 +1,13 @@
 # Obsidian Chatting
 
-> Obsidian の Vault に常駐する agentic な AI アシスタント。スマホ・タブレット・デスクトップで同じ体験。
+[![最新リリース](https://img.shields.io/github/v/release/o1xhack/obsidian-chatting?include_prereleases&label=release&color=7c3aed)](https://github.com/o1xhack/obsidian-chatting/releases)
+[![ダウンロード総数](https://img.shields.io/github/downloads/o1xhack/obsidian-chatting/total?color=7c3aed)](https://github.com/o1xhack/obsidian-chatting/releases)
+[![ライセンス](https://img.shields.io/github/license/o1xhack/obsidian-chatting?color=7c3aed)](../../LICENSE)
+[![Obsidian](https://img.shields.io/badge/obsidian-1.7.0%2B-7c3aed)](https://obsidian.md)
 
-<p align="center">
-  <a href="../../README.md">English</a> ·
-  <a href="README.zh-CN.md">简体中文</a> ·
-  <a href="README.zh-TW.md">繁體中文</a> ·
-  <strong>日本語</strong>
-</p>
+**Obsidian の Vault に常駐する agentic な AI アシスタント —— スマホ・タブレット・デスクトップで同じ体験。**
 
-<p align="center">
-  by <strong>Yuxiao (o1xhack)</strong> ·
-  <a href="https://github.com/o1xhack">GitHub</a> ·
-  <a href="https://app.o1xhack.com">app.o1xhack.com</a>
-</p>
+> 🌐 [English](../../README.md) · [简体中文](README.zh-CN.md) · [繁體中文](README.zh-TW.md) · **日本語**
 
 <p align="center">
   <img src="../../assets/screenshot-settings.png" alt="iPhone のプロバイダ設定画面" width="260">
@@ -23,15 +17,57 @@
 
 ---
 
-## ハイライト
+## ✨ なぜ?
 
-- **3 つのプロバイダから選べる** —— Anthropic API、OpenAI API、または ChatGPT アカウントでサインイン。
-- **14 個の vault ネイティブツール** —— 読み・編集・検索・作成・リネーム・frontmatter・backlinks まで対応。
-- **モバイルでも妥協なし** —— streaming・Node 専用モジュール・localhost コールバックに依存しません。iOS と Android はデスクトップと同じ動作。
-- **選択範囲スコープ** —— テキストを選択して送信すると、アシスタントは選択範囲内だけを編集。
+- **3 つのプロバイダから選べる** —— Anthropic API、OpenAI API、または ChatGPT アカウントでサインイン。中途半端なプロバイダのバザールはやりません。
+- **14 個の vault ネイティブツール** —— 読み・編集・検索・作成・リネーム・frontmatter・backlinks。アイデアからファイル変更まで、チャットを離れずに完結します。
+- **モバイル妥協なし、設計から** —— streaming・Node 専用モジュール・localhost コールバックに依存しません。iOS と Android はデスクトップと同じ動作。
+- **選択範囲スコープ** —— ノートのテキストを選択して送ると、アシスタントは選択範囲内だけを編集。
 - **シークレットは OS のキーチェーンへ** —— `data.json` には絶対に書き込まれず、他端末に同期もされません。
 
-## 3 つのプロバイダ
+## 🎬 一度の指示で複数ツールを連鎖
+
+一度尋ねるだけで、アシスタントが必要なツールを選んで実行します:
+
+```
+あなた: /Books 配下で `rating` プロパティが欠けているノート全部に `rating: ?` を追加して。
+
+アシスタント
+  → search_vault("/Books")               → 12 ファイル
+  → get_properties("Books/Sapiens.md")   → rating あり
+  → get_properties("Books/Hail Mary.md") → rating なし
+  → set_properties("Books/Hail Mary.md", { rating: "?" })
+  → ... (あと 5 件)
+
+  完了 —— 6 ノートに `rating: ?` を追加しました:
+  - Books/Hail Mary.md
+  - Books/Klara and the Sun.md
+  - ...
+```
+
+方針は「編集する前に読む / 大きな書き換えより小さな修正を優先 / 一度確認したことは聞き直さない」です。
+
+## 🎯 選択範囲スコープ
+
+任意のノートでテキストを選択し、右クリックで **Send selection to Chat** を選びます。選択範囲は入力欄の上に pill として表示され、アシスタントはその範囲内だけを編集します —— ドキュメントの残りはバイト単位で完全に同一のままです。
+
+```
+[ pill: "...導入が少し冗長で、しかも..."  ✕ ]
+
+あなた: 引き締めて —— 自分の声色は残して
+```
+
+アシスタントは選択テキストにスコープを限定して find-and-replace を行います。選択範囲外は一切触れません。
+
+## 🛠️ 14 個の vault ネイティブツール
+
+| グループ | ツール | できること |
+|---|---|---|
+| **読み取り** | `read_document`、`read_file`、`search_vault`、`list_files`、`get_backlinks`、`get_properties`、`get_current_datetime` | 任意のノート/ファイルを開く;ファイル名と内容で検索;ツリーを閲覧;バックリンクを取得;YAML frontmatter を読み取り;ユーザーロケールでの現在時刻を取得。 |
+| **書き込み** | `edit_document`、`create_file`、`set_properties` | ピンポイントの find-and-replace / 挿入 / 全置換;新規ノート作成(親フォルダは自動作成);YAML frontmatter の安全な統合または削除。 |
+| **管理** | `rename_file`、`delete_file`、`open_document`、`ask_user` | リネームまたは移動(リンクは自動追従);ゴミ箱へ移動(ユーザーのゴミ箱設定を尊重);エディタでファイルを開く;曖昧なときはこちらに質問し返す。 |
+
+## ⚙️ 3 つのプロバイダ
 
 | プロバイダ | 認証 | 既定モデル | メモ |
 |---|---|---|---|
@@ -41,80 +77,44 @@
 
 > **ChatGPT アカウントサインインについて。** このプロバイダは ChatGPT アカウントでサインインし、リクエストは ChatGPT/Codex バックエンド経由(`api.openai.com` ではない)で送られます。Codex が有効な ChatGPT プランが必要です。利用できるモデルは Codex CLI のカタログに準じます。
 
-## アシスタントができること
+## 🚀 クイックスタート
 
-アシスタントは Obsidian Vault API と直結した 14 個のツールを持ち、用途別にグループ分けされています:
+1. [BRAT](https://github.com/TfTHacker/obsidian42-brat) からインストール → **Add Beta plugin** → `o1xhack/obsidian-chatting`
+2. Community Plugins で **Obsidian Chatting** を有効化
+3. **設定 → Obsidian Chatting** → プロバイダを選び、API キーを貼り付け(または **Connect ChatGPT** をクリック)
+4. リボンアイコンまたはコマンドパレットからチャットを開く
 
-**読み取り**
-- `read_document`、`read_file` —— 任意のノートまたは任意のファイルを開く。
-- `search_vault` —— ファイル名とノート内容を検索。
-- `list_files` —— Vault 構造を一覧。
-- `get_backlinks` —— 指定ノートを参照する全バックリンクを取得。
-- `get_properties` —— YAML フロントマターを読み取り。
-- `get_current_datetime` —— ユーザーロケールでの現在日時。
+## 📦 インストール
 
-**書き込み**
-- `edit_document` —— ピンポイントの find-and-replace、挿入、全置換。
-- `create_file` —— 新規ノート作成(親フォルダは自動作成)。
-- `set_properties` —— YAML フロントマターの安全な統合/削除。
+<details>
+<summary><b>BRAT(推奨)</b></summary>
 
-**管理**
-- `rename_file` —— ファイルのリネーム/移動。リンクは自動追従。
-- `delete_file` —— ゴミ箱へ移動(ユーザーのゴミ箱設定を尊重)。
-- `open_document` —— エディタでファイルを開く。
-- `ask_user` —— 曖昧なときはこちらに質問し返す。
+BRAT は GitHub から直接ベータ版プラグインをインストールし、自動更新もしてくれます。
 
-方針は「編集する前に読む / 大きな書き換えより小さな修正を優先 / 一度確認したことは聞き直さない」です。
+1. Community Plugins から [BRAT](https://github.com/TfTHacker/obsidian42-brat) をインストール
+2. **コマンドパレット → BRAT: Add a beta plugin for testing**
+3. `o1xhack/obsidian-chatting` を入力
+4. Community Plugins で **Obsidian Chatting** を有効化
 
-## 選択範囲スコープ
+</details>
 
-ノートでテキストを選択し、右クリックから **Send selection to Chat** を選びます。選択範囲は入力欄の上に pill として表示され、アシスタントはその範囲内だけを編集します。それ以外には触れません。
+<details>
+<summary><b>手動インストール</b></summary>
 
-## クイックスタート
+1. [最新リリース](https://github.com/o1xhack/obsidian-chatting/releases/latest) から `main.js`、`manifest.json`、`styles.css` をダウンロード
+2. `<vault>/.obsidian/plugins/obsidian-chatting/` に配置
+3. Obsidian を再読み込みし、Community Plugins で **Obsidian Chatting** を有効化
 
-**1. BRAT 経由でインストール**
+</details>
 
-Community Plugins から [BRAT](https://github.com/TfTHacker/obsidian42-brat) をインストールし、**Add Beta plugin** → `o1xhack/obsidian-chatting` を入力。Community Plugins で **Obsidian Chatting** を有効化。
-
-**2. 「設定 → Obsidian Chatting」でプロバイダを選択**
-
-- **Anthropic / OpenAI** —— API キーを貼り付け。[SecretStorage](https://docs.obsidian.md/plugins/guides/secret-storage) 経由で OS のキーチェーンに保存されます。
-- **ChatGPT アカウント** —— **Connect ChatGPT** をクリック。ダイアログに検証 URL とワンタイム code が表示されます。任意のブラウザで URL を開き、サインインして code を入力。トークンは自動更新されます。更新に失敗した場合は明示的な *「session expired, reconnect」* の通知が表示されます。
-
-**3. チャットを開く**
-
-リボンアイコンまたはコマンドパレットから開けます。
-
-## 設計原則
-
-| 原則 | 意味 |
-|---|---|
-| **モバイルは後付けではない** | すべての変更を iOS と Android で検証。streaming・Node 専用モジュール・localhost コールバックに依存しません。 |
-| **3 つの堅実なプロバイダ** | Anthropic + OpenAI で安定性、ChatGPT アカウントで API キー不要派をカバー。半端なプロバイダのバザールはやりません。 |
-| **シークレットはキーチェーンへ** | API キーと OAuth 認証情報は Obsidian SecretStorage 経由。`data.json` には入らないため、他の端末に同期もされません。 |
-| **Vault のインデックス化は行わない** | 上限つきの線形検索のみ。予測可能で、バックグラウンドジョブなし、モバイルでもメモリを圧迫しません。 |
-| **会話は永続化** | チャット履歴は Obsidian 再起動後も残ります。ローカルの `chat-state.json` に保存され、同期されません。 |
-| **モバイルでは右からスライドイン** | 右端から入るサイドバーで、下のドキュメントは見えたまま。 |
-
-## ロードマップ
-
-順序は約束しませんが、視野には入っています:
-
-- Obsidian Community Plugins への提出。
-- 複数会話履歴 + アーカイブ/検索。
-- プロバイダがサポートする画像添付。
-- 上流で新しくリリースされたプロバイダモデルへの自動追従。
-
-要望があれば issue を立ててください。
-
-## 開発
+<details>
+<summary><b>ソースからビルド</b></summary>
 
 ```bash
 git clone https://github.com/o1xhack/obsidian-chatting.git
 cd obsidian-chatting
 npm install
-npm run dev    # Watch モード
-npm run build  # 本番ビルド
+npm run build
 ```
 
 テスト用 vault にシンボリックリンク:
@@ -123,6 +123,85 @@ npm run build  # 本番ビルド
 ln -s "$(pwd)" /path/to/vault/.obsidian/plugins/obsidian-chatting
 ```
 
-## ライセンス
+</details>
 
-[MIT](../../LICENSE)。元々は [omarshahine/obsidian-chat](https://github.com/omarshahine/obsidian-chat)(同じく MIT)から派生したもので、原版の著作権表示は `LICENSE` に保持されています。Obsidian Chatting は現在、独自のロードマップを持つ独立プロジェクトです。
+## 🧭 設計原則
+
+| 原則 | 意味 |
+|---|---|
+| **モバイルは後付けではない** | すべての変更を iOS と Android で検証。streaming・Node 専用モジュール・localhost コールバックに依存しません。 |
+| **3 つの堅実なプロバイダ** | Anthropic + OpenAI で安定性、ChatGPT アカウントで API キー不要派をカバー。 |
+| **シークレットはキーチェーンへ** | API キーと OAuth 認証情報は Obsidian SecretStorage 経由。`data.json` には入らないため、他の端末に同期もされません。 |
+| **Vault のインデックス化は行わない** | 上限つきの線形検索のみ。予測可能で、バックグラウンドジョブなし、モバイルでもメモリを圧迫しません。 |
+| **会話は永続化** | チャット履歴は Obsidian 再起動後も残ります。ローカルの `chat-state.json` に保存され、同期されません。 |
+| **モバイルでは右からスライドイン** | 右端から入るサイドバーで、下のドキュメントは見えたまま。 |
+
+## 🗺️ ロードマップ
+
+- [x] 3 つのプロバイダ(Anthropic、OpenAI、ChatGPT アカウント)
+- [x] 14 個の vault ネイティブツール
+- [x] iOS / Android パリティ
+- [x] 選択範囲スコープ
+- [ ] Obsidian Community Plugins への提出
+- [ ] 複数会話履歴 + アーカイブ/検索
+- [ ] プロバイダがサポートする画像添付
+- [ ] 上流で新しくリリースされたプロバイダモデルへの自動追従
+
+要望があれば issue を立ててください。
+
+## ❓ FAQ
+
+<details>
+<summary><b>ノートはどこかにアップロードされますか?</b></summary>
+
+その場のターンに必要な分だけです。あなたが質問すると、アシスタントが呼び出すツール —— `read_document`、`search_vault` など —— を判断し、それらが取得した内容(プラスアクティブなノートのコンテキスト)が選択したプロバイダに送られます。バックグラウンドで何かをアップロードすることはありません。**Vault のインデックスも作りません。**
+
+</details>
+
+<details>
+<summary><b>本当にモバイルで動きますか?</b></summary>
+
+はい —— その制約こそが他のすべての設計の起点です。リクエストは Obsidian の `requestUrl()` を通り(モバイル WebView は CORS を強制)、streaming も Node 専用モジュールも、OAuth の localhost コールバックも使いません。iOS と Android はデスクトップと同一のコードパスで動きます。
+
+</details>
+
+<details>
+<summary><b>ChatGPT アカウントサインインは無料ですか?</b></summary>
+
+既存の ChatGPT プラン(Plus、Pro、Team、Enterprise)を利用するため、別途課金は発生しません。Codex が有効な ChatGPT プランが必要です。プラグインは `api.openai.com` ではなく、Codex CLI が使うのと同じバックエンドに通信します。
+
+</details>
+
+<details>
+<summary><b>X というプロバイダを追加できますか?</b></summary>
+
+おそらく追加しません —— プロバイダ一覧を小さく保つのは意図的な選択です。2 つの API プロバイダで主要な API エコシステムをカバーし、ChatGPT アカウントサインインで「ChatGPT プランしか持っていない」ケースをカバーしています。これ以上増やすとモバイルで検証する組み合わせが増えます。
+
+</details>
+
+<details>
+<summary><b>チャット履歴はどこに保存され、同期されますか?</b></summary>
+
+ローカルの `<vault>/.obsidian/plugins/obsidian-chatting/chat-state.json` に保存されます。**Obsidian Sync は既定でプラグインデータファイルを除外する**ため、同期されません。API キーは SecretStorage 経由で OS のキーチェーンに保存され、これも同期されません。
+
+</details>
+
+## 🤝 コントリビューション
+
+Issue と PR を歓迎します。PR を出す前に:
+
+- `npx tsc --noEmit` と `npm run svelte-check` を実行
+- 少なくとも 1 つのモバイルプラットフォーム(iOS または Android)で動作確認 ——「モバイルパリティ」は本気のルールです
+- 大きめの変更は、まず Issue で方向性をすり合わせてから
+
+## 🙏 謝辞
+
+元々は [omarshahine/obsidian-chat](https://github.com/omarshahine/obsidian-chat)(MIT)から派生したもので、原版の著作権表示は `LICENSE` に保持されています。Obsidian Chatting は現在、独自のロードマップを持つ独立プロジェクトです —— 主な書き換えには agent ループ、モバイルパリティ対応、ChatGPT アカウントプロバイダ、選択範囲スコープ機能が含まれます。
+
+## 📄 ライセンス
+
+[MIT](../../LICENSE)。
+
+---
+
+作者: [Yuxiao (o1xhack)](https://github.com/o1xhack) · [app.o1xhack.com](https://app.o1xhack.com)

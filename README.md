@@ -1,19 +1,13 @@
 # Obsidian Chatting
 
-> An agentic AI assistant for your Obsidian vault — same experience on phone, tablet, and desktop.
+[![Latest release](https://img.shields.io/github/v/release/o1xhack/obsidian-chatting?include_prereleases&label=release&color=7c3aed)](https://github.com/o1xhack/obsidian-chatting/releases)
+[![Total downloads](https://img.shields.io/github/downloads/o1xhack/obsidian-chatting/total?color=7c3aed)](https://github.com/o1xhack/obsidian-chatting/releases)
+[![License](https://img.shields.io/github/license/o1xhack/obsidian-chatting?color=7c3aed)](LICENSE)
+[![Obsidian](https://img.shields.io/badge/obsidian-1.7.0%2B-7c3aed)](https://obsidian.md)
 
-<p align="center">
-  English ·
-  <a href="docs/i18n/README.zh-CN.md">简体中文</a> ·
-  <a href="docs/i18n/README.zh-TW.md">繁體中文</a> ·
-  <a href="docs/i18n/README.ja.md">日本語</a>
-</p>
+**An agentic AI assistant that lives in your Obsidian vault — same experience on phone, tablet, and desktop.**
 
-<p align="center">
-  by <strong>Yuxiao (o1xhack)</strong> ·
-  <a href="https://github.com/o1xhack">GitHub</a> ·
-  <a href="https://app.o1xhack.com">app.o1xhack.com</a>
-</p>
+> 🌐 **English** · [简体中文](docs/i18n/README.zh-CN.md) · [繁體中文](docs/i18n/README.zh-TW.md) · [日本語](docs/i18n/README.ja.md)
 
 <p align="center">
   <img src="assets/screenshot-settings.png" alt="Provider settings on iPhone" width="260">
@@ -23,15 +17,57 @@
 
 ---
 
-## Highlights
+## ✨ Why?
 
-- **Three providers, your choice** — Anthropic API, OpenAI API, or sign in with your ChatGPT account.
-- **14 vault-native tools** — read, edit, search, create, rename, frontmatter, backlinks, and more.
-- **Mobile-parity** — no streaming, no Node-only modules, no localhost callbacks. iOS and Android behave the same as desktop.
-- **Selection scope** — highlight text, send it to chat, the assistant edits only inside the selection.
+- **Three providers, your choice** — Anthropic API, OpenAI API, or sign in with your ChatGPT account. No marketplace of half-broken providers.
+- **14 vault-native tools** — read, edit, search, create, rename, frontmatter, backlinks. The agent goes from idea to changed files without leaving the chat.
+- **Mobile-parity, by design** — no streaming, no Node-only modules, no localhost callbacks. iOS and Android behave the same as desktop.
+- **Selection scope** — highlight text in any note, send it to chat, the assistant edits only inside the selection.
 - **Secrets in the OS keychain** — never in `data.json`, never synced across devices.
 
-## Providers
+## 🎬 One conversation, many tools
+
+Ask once, the agent figures out which tools to call:
+
+```
+You: Find every note in /Books that's missing a `rating` property and add `rating: ?`.
+
+Assistant
+  → search_vault("/Books")               → 12 files
+  → get_properties("Books/Sapiens.md")   → has rating
+  → get_properties("Books/Hail Mary.md") → no rating
+  → set_properties("Books/Hail Mary.md", { rating: "?" })
+  → ... (5 more)
+
+  Done — added `rating: ?` to 6 notes:
+  - Books/Hail Mary.md
+  - Books/Klara and the Sun.md
+  - ...
+```
+
+The agent reads before it edits, prefers small surgical changes over rewrites, and doesn't re-ask once you confirm.
+
+## 🎯 Selection scope
+
+Highlight text in any note, right-click, choose **Send selection to Chat**. The selection becomes a pill above the input and the assistant edits only inside the selected range — leaving the rest of the document byte-identical.
+
+```
+[ pill: "...the introduction was a bit dry, and..."  ✕ ]
+
+You: tighten this — keep my voice
+```
+
+The agent uses find-and-replace scoped to the selection text. Everything outside the highlight stays untouched.
+
+## 🛠️ 14 vault-native tools
+
+| Group | Tools | What they do |
+|---|---|---|
+| **Read** | `read_document`, `read_file`, `search_vault`, `list_files`, `get_backlinks`, `get_properties`, `get_current_datetime` | Open notes/files, search by name and content, browse the tree, find backlinks, read frontmatter, fetch the current time in your locale. |
+| **Write** | `edit_document`, `create_file`, `set_properties` | Surgical find-and-replace / insert / full replace; create new notes (parent folders auto-created); safe YAML frontmatter merge or remove. |
+| **Manage** | `rename_file`, `delete_file`, `open_document`, `ask_user` | Rename or move (links auto-update); move to trash (respects your trash setting); open a file in the editor; pause and ask you when something is ambiguous. |
+
+## ⚙️ Providers
 
 | Provider | Auth | Default model | Notes |
 |---|---|---|---|
@@ -41,80 +77,44 @@
 
 > **About ChatGPT account login.** This provider signs you in with your ChatGPT account and routes requests through the ChatGPT/Codex backend (not `api.openai.com`). It requires an active ChatGPT plan with Codex access. The available models mirror the Codex CLI catalog.
 
-## What the agent can do
+## 🚀 Quick start
 
-The assistant has direct access to your vault through 14 tools, grouped by what they touch:
+1. Install via [BRAT](https://github.com/TfTHacker/obsidian42-brat) → **Add Beta plugin** → `o1xhack/obsidian-chatting`
+2. Enable **Obsidian Chatting** in Community Plugins
+3. **Settings → Obsidian Chatting** → pick a provider, paste an API key (or click **Connect ChatGPT**)
+4. Open the chat from the ribbon icon or the command palette
 
-**Read**
-- `read_document`, `read_file` — open any note or any vault file.
-- `search_vault` — search filenames and note content.
-- `list_files` — browse the vault tree.
-- `get_backlinks` — find notes linking to a given note.
-- `get_properties` — read YAML frontmatter.
-- `get_current_datetime` — current date/time in your locale.
+## 📦 Install
 
-**Write**
-- `edit_document` — surgical find-and-replace, insert, or full replace.
-- `create_file` — create a new note with a suggested path (parent folders auto-created).
-- `set_properties` — safe YAML frontmatter merge / remove.
+<details>
+<summary><b>BRAT (recommended)</b></summary>
 
-**Manage**
-- `rename_file` — rename or move; links update automatically.
-- `delete_file` — move to trash (respects your trash setting).
-- `open_document` — open a file in the editor.
-- `ask_user` — pause and ask you when something is ambiguous.
+BRAT installs beta plugins directly from GitHub and keeps them up to date.
 
-The assistant reads before it edits, prefers small surgical changes over rewrites, and does not re-ask once you confirm an action.
+1. Install [BRAT](https://github.com/TfTHacker/obsidian42-brat) from Community Plugins
+2. **Command palette → BRAT: Add a beta plugin for testing**
+3. Enter `o1xhack/obsidian-chatting`
+4. Enable **Obsidian Chatting** in Community Plugins
 
-## Selection scope
+</details>
 
-Highlight text in any note, right-click, choose **Send selection to Chat**. The selection becomes a pill above the input, and the assistant edits only inside the selected range — leaving the rest of the document untouched.
+<details>
+<summary><b>Manual</b></summary>
 
-## Quickstart
+1. Download `main.js`, `manifest.json`, `styles.css` from the [latest release](https://github.com/o1xhack/obsidian-chatting/releases/latest)
+2. Place them in `<vault>/.obsidian/plugins/obsidian-chatting/`
+3. Reload Obsidian and enable **Obsidian Chatting** in Community Plugins
 
-**1. Install via BRAT**
+</details>
 
-Install [BRAT](https://github.com/TfTHacker/obsidian42-brat) from Community Plugins, then **Add Beta plugin** → enter `o1xhack/obsidian-chatting`. Enable **Obsidian Chatting** in Community Plugins.
-
-**2. Pick a provider in Settings → Obsidian Chatting**
-
-- **Anthropic / OpenAI** — paste your API key. Stored in the OS keychain via [SecretStorage](https://docs.obsidian.md/plugins/guides/secret-storage).
-- **ChatGPT account** — click **Connect ChatGPT**. A modal shows a verification URL and a one-time code. Open the URL in any browser, sign in, enter the code. Tokens auto-refresh; if a refresh ever fails you'll see a clear *"session expired, reconnect"* notice.
-
-**3. Open the chat**
-
-Use the ribbon icon or the command palette.
-
-## Design principles
-
-| Principle | What it means |
-|---|---|
-| **Mobile is not an afterthought** | Every change is validated on iOS and Android. No streaming, no Node-only modules, no localhost callbacks. |
-| **Three sane providers** | Anthropic + OpenAI for stability, ChatGPT account for users who'd rather not manage an API key. No marketplace of half-broken providers. |
-| **Secrets in the keychain** | API keys and OAuth credentials go through Obsidian SecretStorage. They never land in `data.json`, so they never sync to other devices. |
-| **No vault indexing** | Linear search, capped. Predictable, no background work, no memory pressure on phones. |
-| **Conversation persists** | Chat history survives Obsidian restarts. Stored locally in `chat-state.json`, never synced. |
-| **Right sidebar on mobile** | Slides in from the edge — your document stays visible underneath. |
-
-## Roadmap
-
-No promises on order, but on the radar:
-
-- Submission to the official Obsidian Community Plugins listing.
-- Multi-conversation history with archive / search.
-- Image attachments where the provider supports them.
-- More upstream provider models picked up automatically as they ship.
-
-Have a request? Open an issue.
-
-## Development
+<details>
+<summary><b>Build from source</b></summary>
 
 ```bash
 git clone https://github.com/o1xhack/obsidian-chatting.git
 cd obsidian-chatting
 npm install
-npm run dev    # Watch mode
-npm run build  # Production build
+npm run build
 ```
 
 Symlink into a test vault:
@@ -123,6 +123,85 @@ Symlink into a test vault:
 ln -s "$(pwd)" /path/to/vault/.obsidian/plugins/obsidian-chatting
 ```
 
-## License
+</details>
 
-[MIT](./LICENSE). Originally derived from [omarshahine/obsidian-chat](https://github.com/omarshahine/obsidian-chat) (also MIT) — the original copyright is preserved in `LICENSE` for attribution. Obsidian Chatting is now an independent project with its own roadmap.
+## 🧭 Design principles
+
+| Principle | What it means |
+|---|---|
+| **Mobile is not an afterthought** | Every change is validated on iOS and Android. No streaming, no Node-only modules, no localhost callbacks. |
+| **Three sane providers** | Anthropic + OpenAI for stability, ChatGPT account for users who'd rather not manage an API key. |
+| **Secrets in the keychain** | API keys and OAuth credentials go through Obsidian SecretStorage. They never land in `data.json`, so they never sync to other devices. |
+| **No vault indexing** | Linear search, capped. Predictable, no background work, no memory pressure on phones. |
+| **Conversation persists** | Chat history survives Obsidian restarts. Stored locally in `chat-state.json`, never synced. |
+| **Right sidebar on mobile** | Slides in from the edge — your document stays visible underneath. |
+
+## 🗺️ Roadmap
+
+- [x] Three providers (Anthropic, OpenAI, ChatGPT account)
+- [x] 14 vault-native tools
+- [x] iOS / Android parity
+- [x] Selection scope
+- [ ] Submission to the official Obsidian Community Plugins listing
+- [ ] Multi-conversation history with archive / search
+- [ ] Image attachments where the provider supports them
+- [ ] More upstream provider models picked up automatically as they ship
+
+Have a request? Open an issue.
+
+## ❓ FAQ
+
+<details>
+<summary><b>Will my notes be uploaded somewhere?</b></summary>
+
+Only what the agent needs for the current turn. When you ask a question, the agent decides which tools to call — `read_document`, `search_vault`, etc. — and the contents fetched by those calls (plus the active note context) are sent to your chosen provider. Nothing is uploaded in the background. There is no vault index.
+
+</details>
+
+<details>
+<summary><b>Does it really work on mobile?</b></summary>
+
+Yes — that's the design constraint everything else is built around. Requests go through Obsidian's `requestUrl()` (mobile WebViews enforce CORS), there's no streaming, no Node-only modules, no localhost callback for OAuth. iOS and Android run the same code path as desktop.
+
+</details>
+
+<details>
+<summary><b>Is the ChatGPT account login free?</b></summary>
+
+It uses your existing ChatGPT plan (Plus, Pro, Team, Enterprise) — there's no separate billing. You need an active plan with Codex access. The plugin doesn't talk to `api.openai.com`; it talks to the same backend the Codex CLI uses.
+
+</details>
+
+<details>
+<summary><b>Can you add provider X?</b></summary>
+
+Probably not — keeping the provider list small is a deliberate choice. Two API providers cover the major ecosystems, and ChatGPT account login covers the "I just have a ChatGPT plan" case. Adding more would mean more permutations to validate on mobile.
+
+</details>
+
+<details>
+<summary><b>Where is chat history stored? Will it sync?</b></summary>
+
+Locally in `<vault>/.obsidian/plugins/obsidian-chatting/chat-state.json`. It is **not** synced by Obsidian Sync (plugin data files are excluded by default). API keys live in the OS keychain via SecretStorage and are also not synced.
+
+</details>
+
+## 🤝 Contributing
+
+Issues and PRs welcome. Before opening a PR:
+
+- Run `npx tsc --noEmit` and `npm run svelte-check`
+- Test on at least one mobile platform (iOS or Android) — the mobile-parity rule is real
+- For larger changes, open an issue first to align on direction
+
+## 🙏 Acknowledgements
+
+Originally derived from [omarshahine/obsidian-chat](https://github.com/omarshahine/obsidian-chat) (MIT). The original copyright is preserved in `LICENSE`. Obsidian Chatting is now an independent project with its own roadmap — major rewrites include the agent loop, mobile-parity work, the ChatGPT account provider, and the selection-scope feature.
+
+## 📄 License
+
+[MIT](./LICENSE).
+
+---
+
+Author: [Yuxiao (o1xhack)](https://github.com/o1xhack) · [app.o1xhack.com](https://app.o1xhack.com)
