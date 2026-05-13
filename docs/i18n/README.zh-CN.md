@@ -1,4 +1,4 @@
-# Obsidian Chatting
+# Chatting with AI
 
 [![最新版本](https://img.shields.io/github/v/release/o1xhack/obsidian-chatting?include_prereleases&label=release&color=7c3aed)](https://github.com/o1xhack/obsidian-chatting/releases)
 [![下载总数](https://img.shields.io/github/downloads/o1xhack/obsidian-chatting/total?color=7c3aed)](https://github.com/o1xhack/obsidian-chatting/releases)
@@ -80,8 +80,8 @@
 ## 🚀 快速上手
 
 1. 通过 [BRAT](https://github.com/TfTHacker/obsidian42-brat) 安装 → **Add Beta plugin** → 输入 `o1xhack/obsidian-chatting`
-2. 在社区插件里启用 **Obsidian Chatting**
-3. **设置 → Obsidian Chatting** → 选 provider,粘贴 API key(或者点 **Connect ChatGPT**)
+2. 在社区插件里启用 **Chatting with AI**
+3. **设置 → Chatting with AI** → 选 provider,粘贴 API key(或者点 **Connect ChatGPT**)
 4. 从侧边栏图标或命令面板打开聊天
 
 ## 📦 安装
@@ -94,7 +94,7 @@ BRAT 直接从 GitHub 安装 beta 插件,并自动跟进更新。
 1. 从社区插件安装 [BRAT](https://github.com/TfTHacker/obsidian42-brat)
 2. **命令面板 → BRAT: Add a beta plugin for testing**
 3. 输入 `o1xhack/obsidian-chatting`
-4. 在社区插件里启用 **Obsidian Chatting**
+4. 在社区插件里启用 **Chatting with AI**
 
 </details>
 
@@ -102,8 +102,8 @@ BRAT 直接从 GitHub 安装 beta 插件,并自动跟进更新。
 <summary><b>手动安装</b></summary>
 
 1. 从 [最新发布版本](https://github.com/o1xhack/obsidian-chatting/releases/latest) 下载 `main.js`、`manifest.json`、`styles.css`
-2. 放入 `<vault>/.obsidian/plugins/obsidian-chatting/`
-3. 重启 Obsidian,在社区插件里启用 **Obsidian Chatting**
+2. 放入 `<vault>/.obsidian/plugins/chatting-with-ai/`
+3. 重启 Obsidian,在社区插件里启用 **Chatting with AI**
 
 </details>
 
@@ -120,7 +120,7 @@ npm run build
 软链到测试 vault:
 
 ```bash
-ln -s "$(pwd)" /path/to/vault/.obsidian/plugins/obsidian-chatting
+ln -s "$(pwd)" /path/to/vault/.obsidian/plugins/chatting-with-ai
 ```
 
 </details>
@@ -182,7 +182,7 @@ ln -s "$(pwd)" /path/to/vault/.obsidian/plugins/obsidian-chatting
 <details>
 <summary><b>聊天历史存在哪里?会同步吗?</b></summary>
 
-存在本地 `<vault>/.obsidian/plugins/obsidian-chatting/chat-state.json`。**Obsidian Sync 默认排除插件数据文件**,不会被同步。API key 通过 SecretStorage 进操作系统钥匙串,同样不同步。
+存在本地 `<vault>/.obsidian/plugins/chatting-with-ai/chat-state.json`。**Obsidian Sync 默认排除插件数据文件**,不会被同步。API key 通过 SecretStorage 进操作系统钥匙串,同样不同步。
 
 </details>
 
@@ -196,7 +196,7 @@ ln -s "$(pwd)" /path/to/vault/.obsidian/plugins/obsidian-chatting
 
 ## 🙏 致谢
 
-最初衍生自 [omarshahine/obsidian-chat](https://github.com/omarshahine/obsidian-chat)(同为 MIT)—— 原版权信息已保留在 `LICENSE` 中。Obsidian Chatting 现在是一个独立项目,有自己的路线图 —— 主要的重写包括 agent loop、移动端适配、ChatGPT 账号登录,以及选区作用域功能。
+最初衍生自 [omarshahine/obsidian-chat](https://github.com/omarshahine/obsidian-chat)(同为 MIT)—— 原版权信息已保留在 `LICENSE` 中。Chatting with AI 现在是一个独立项目,有自己的路线图 —— 主要的重写包括 agent loop、移动端适配、ChatGPT 账号登录,以及选区作用域功能。
 
 ## 📄 许可证
 

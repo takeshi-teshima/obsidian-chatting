@@ -1,4 +1,4 @@
-# Obsidian Chatting
+# Chatting with AI
 
 [![Latest release](https://img.shields.io/github/v/release/o1xhack/obsidian-chatting?include_prereleases&label=release&color=7c3aed)](https://github.com/o1xhack/obsidian-chatting/releases)
 [![Total downloads](https://img.shields.io/github/downloads/o1xhack/obsidian-chatting/total?color=7c3aed)](https://github.com/o1xhack/obsidian-chatting/releases)
@@ -80,8 +80,8 @@ The agent uses find-and-replace scoped to the selection text. Everything outside
 ## 🚀 Quick start
 
 1. Install via [BRAT](https://github.com/TfTHacker/obsidian42-brat) → **Add Beta plugin** → `o1xhack/obsidian-chatting`
-2. Enable **Obsidian Chatting** in Community Plugins
-3. **Settings → Obsidian Chatting** → pick a provider, paste an API key (or click **Connect ChatGPT**)
+2. Enable **Chatting with AI** in Community Plugins
+3. **Settings → Chatting with AI** → pick a provider, paste an API key (or click **Connect ChatGPT**)
 4. Open the chat from the ribbon icon or the command palette
 
 ## 📦 Install
@@ -94,7 +94,7 @@ BRAT installs beta plugins directly from GitHub and keeps them up to date.
 1. Install [BRAT](https://github.com/TfTHacker/obsidian42-brat) from Community Plugins
 2. **Command palette → BRAT: Add a beta plugin for testing**
 3. Enter `o1xhack/obsidian-chatting`
-4. Enable **Obsidian Chatting** in Community Plugins
+4. Enable **Chatting with AI** in Community Plugins
 
 </details>
 
@@ -102,8 +102,8 @@ BRAT installs beta plugins directly from GitHub and keeps them up to date.
 <summary><b>Manual</b></summary>
 
 1. Download `main.js`, `manifest.json`, `styles.css` from the [latest release](https://github.com/o1xhack/obsidian-chatting/releases/latest)
-2. Place them in `<vault>/.obsidian/plugins/obsidian-chatting/`
-3. Reload Obsidian and enable **Obsidian Chatting** in Community Plugins
+2. Place them in `<vault>/.obsidian/plugins/chatting-with-ai/`
+3. Reload Obsidian and enable **Chatting with AI** in Community Plugins
 
 </details>
 
@@ -120,7 +120,7 @@ npm run build
 Symlink into a test vault:
 
 ```bash
-ln -s "$(pwd)" /path/to/vault/.obsidian/plugins/obsidian-chatting
+ln -s "$(pwd)" /path/to/vault/.obsidian/plugins/chatting-with-ai
 ```
 
 </details>
@@ -182,7 +182,7 @@ Probably not — keeping the provider list small is a deliberate choice. Two API
 <details>
 <summary><b>Where is chat history stored? Will it sync?</b></summary>
 
-Locally in `<vault>/.obsidian/plugins/obsidian-chatting/chat-state.json`. It is **not** synced by Obsidian Sync (plugin data files are excluded by default). API keys live in the OS keychain via SecretStorage and are also not synced.
+Locally in `<vault>/.obsidian/plugins/chatting-with-ai/chat-state.json`. It is **not** synced by Obsidian Sync (plugin data files are excluded by default). API keys live in the OS keychain via SecretStorage and are also not synced.
 
 </details>
 
@@ -196,7 +196,7 @@ Issues and PRs welcome. Before opening a PR:
 
 ## 🙏 Acknowledgements
 
-Originally derived from [omarshahine/obsidian-chat](https://github.com/omarshahine/obsidian-chat) (MIT). The original copyright is preserved in `LICENSE`. Obsidian Chatting is now an independent project with its own roadmap — major rewrites include the agent loop, mobile-parity work, the ChatGPT account provider, and the selection-scope feature.
+Originally derived from [omarshahine/obsidian-chat](https://github.com/omarshahine/obsidian-chat) (MIT). The original copyright is preserved in `LICENSE`. Chatting with AI is now an independent project with its own roadmap — major rewrites include the agent loop, mobile-parity work, the ChatGPT account provider, and the selection-scope feature.
 
 ## 📄 License
 

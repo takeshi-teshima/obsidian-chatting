@@ -30,7 +30,7 @@ const CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann";
 const DEVICE_VERIFICATION_URI = `${ISSUER}/codex/device`;
 const DEVICE_REDIRECT_URI = `${ISSUER}/deviceauth/callback`;
 const POLL_MARGIN_MS = 3000;
-const USER_AGENT = "obsidian-chatting/chatgpt-oauth";
+const USER_AGENT = "chatting-with-ai/chatgpt-oauth";
 
 export class ChatGPTOAuthError extends Error {
   constructor(message: string) {

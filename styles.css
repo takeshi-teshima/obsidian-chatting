@@ -1,5 +1,5 @@
 /* ═══════════════════════════════════════════════════════════════════════════
-   Obsidian Chatting — Global styles (outside Svelte component scope)
+   Chatting with AI — Global styles (outside Svelte component scope)
    Component styles live in ChatContainer.svelte with scoped CSS.
    All class names use the `ochatting-` prefix to avoid colliding with
    upstream Obsidian Chat (`ochat-`) when both plugins are installed.

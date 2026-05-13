@@ -17,6 +17,17 @@ import { ChatGPTOAuthStore } from "./auth/chatgptOAuthStore";
 import { ChatGPTOAuthService } from "./auth/chatgptOAuth";
 import { setChatGPTOAuthService } from "./api/chatgpt-oauth";
 
+const PLUGIN_ID = "chatting-with-ai";
+const LEGACY_PLUGIN_ID = "obsidian-chatting";
+const PLUGIN_DATA_DIR = `.obsidian/plugins/${PLUGIN_ID}`;
+const LEGACY_PLUGIN_DATA_DIR = `.obsidian/plugins/${LEGACY_PLUGIN_ID}`;
+const CHAT_STATE_PATH = `.obsidian/plugins/${PLUGIN_ID}/chat-state.json`;
+const LEGACY_CHAT_STATE_PATH = `.obsidian/plugins/${LEGACY_PLUGIN_ID}/chat-state.json`;
+const LEGACY_RELEASE_ASSETS = new Set(["main.js", "manifest.json", "styles.css"]);
+const SECRET_PROVIDERS = ["anthropic", "openai", "chatgpt-oauth"];
+const CHATGPT_OAUTH_SECRET_KEY = `${PLUGIN_ID}-chatgpt-oauth`;
+const LEGACY_CHATGPT_OAUTH_SECRET_KEY = `${LEGACY_PLUGIN_ID}-chatgpt-oauth`;
+
 export default class ChatPlugin extends Plugin {
   settings: ChatSettings = DEFAULT_SETTINGS;
   /** Shared agent loop that persists across view open/close cycles */
@@ -27,6 +38,7 @@ export default class ChatPlugin extends Plugin {
   chatHistory: Array<{ type: string; text?: string; toolName?: string; toolInput?: Record<string, unknown>; toolResult?: { result: string; isError: boolean } }> = [];
 
   async onload(): Promise<void> {
+    await this.migrateLegacyPluginData();
     await this.loadSettings();
 
     // Wire ChatGPT OAuth before constructing the agent: the OAuth API client
@@ -46,7 +58,7 @@ export default class ChatPlugin extends Plugin {
     this.registerView(VIEW_TYPE_CHAT, (leaf) => new ObsidianChatView(leaf, this));
 
     // Ribbon icon (users can hide; commands are the primary access)
-    this.addRibbonIcon("message-circle", "Open Obsidian Chatting", (evt) => {
+    this.addRibbonIcon("message-circle", "Open Chatting with AI", (evt) => {
       if (evt.type === "contextmenu" || (evt instanceof MouseEvent && evt.button === 2)) {
         // Right-click: show menu with options
         const menu = new Menu();
@@ -163,9 +175,9 @@ export default class ChatPlugin extends Plugin {
 
   private notConfiguredMessage(): string {
     if (this.settings.provider === "chatgpt-oauth") {
-      return "Connect your ChatGPT account in Obsidian Chatting settings.";
+      return "Connect your ChatGPT account in Chatting with AI settings.";
     }
-    return "Please configure your API key in Obsidian Chatting settings.";
+    return "Please configure your API key in Chatting with AI settings.";
   }
 
   private async openChat(): Promise<void> {
@@ -283,7 +295,7 @@ export default class ChatPlugin extends Plugin {
         agentMessages: this.agent.exportMessages().slice(-80), // Cap at 80 API messages
       };
       await this.app.vault.adapter.write(
-        ".obsidian/plugins/obsidian-chatting/chat-state.json",
+        CHAT_STATE_PATH,
         JSON.stringify(state)
       );
     } catch {
@@ -293,9 +305,7 @@ export default class ChatPlugin extends Plugin {
 
   private async loadChatHistory(): Promise<void> {
     try {
-      const raw = await this.app.vault.adapter.read(
-        ".obsidian/plugins/obsidian-chatting/chat-state.json"
-      );
+      const raw = await this.readFirstExisting([CHAT_STATE_PATH, LEGACY_CHAT_STATE_PATH]);
       const state = JSON.parse(raw);
       if (Array.isArray(state.chatHistory)) {
         this.chatHistory = state.chatHistory;
@@ -357,7 +367,11 @@ export default class ChatPlugin extends Plugin {
 
   private loadApiKey(provider: string): string {
     try {
-      return this.app.secretStorage.getSecret(`obsidian-chatting-api-key-${provider}`) || "";
+      return (
+        this.app.secretStorage.getSecret(`${PLUGIN_ID}-api-key-${provider}`) ||
+        this.app.secretStorage.getSecret(`${LEGACY_PLUGIN_ID}-api-key-${provider}`) ||
+        ""
+      );
     } catch {
       return "";
     }
@@ -365,9 +379,102 @@ export default class ChatPlugin extends Plugin {
 
   private saveApiKey(provider: string, key: string): void {
     try {
-      this.app.secretStorage.setSecret(`obsidian-chatting-api-key-${provider}`, key);
+      this.app.secretStorage.setSecret(`${PLUGIN_ID}-api-key-${provider}`, key);
     } catch {
       // SecretStorage not available
+    }
+  }
+
+  private async readFirstExisting(paths: string[]): Promise<string> {
+    let lastError: unknown;
+    for (const path of paths) {
+      try {
+        return await this.app.vault.adapter.read(path);
+      } catch (e) {
+        lastError = e;
+      }
+    }
+    throw lastError;
+  }
+
+  private async migrateLegacyPluginData(): Promise<void> {
+    await Promise.all([
+      this.migrateLegacyDataFiles(),
+      this.migrateLegacySecrets(),
+    ]);
+  }
+
+  private async migrateLegacyDataFiles(): Promise<void> {
+    const adapter = this.app.vault.adapter;
+    try {
+      if (!(await adapter.exists(LEGACY_PLUGIN_DATA_DIR))) return;
+      await this.ensureFolder(PLUGIN_DATA_DIR);
+      await this.copyLegacyPluginDataDir(LEGACY_PLUGIN_DATA_DIR, PLUGIN_DATA_DIR, true);
+
+      await adapter.rmdir(LEGACY_PLUGIN_DATA_DIR, true);
+    } catch {
+      // Migration is best-effort; legacy fallback reads still protect users.
+    }
+  }
+
+  private async copyLegacyPluginDataDir(fromDir: string, toDir: string, isRoot: boolean): Promise<void> {
+    const adapter = this.app.vault.adapter;
+    const listed = await adapter.list(fromDir);
+
+    for (const folder of listed.folders) {
+      const name = folder.split("/").pop();
+      if (!name) continue;
+      const target = `${toDir}/${name}`;
+      await this.ensureFolder(target);
+      await this.copyLegacyPluginDataDir(folder, target, false);
+    }
+
+    for (const file of listed.files) {
+      const name = file.split("/").pop();
+      if (!name) continue;
+      if (isRoot && LEGACY_RELEASE_ASSETS.has(name)) continue;
+
+      const target = `${toDir}/${name}`;
+      if (!(await adapter.exists(target))) {
+        await adapter.writeBinary(target, await adapter.readBinary(file));
+      }
+    }
+  }
+
+  private async ensureFolder(path: string): Promise<void> {
+    const adapter = this.app.vault.adapter;
+    if (await adapter.exists(path)) return;
+    const parent = path.split("/").slice(0, -1).join("/");
+    if (parent) await this.ensureFolder(parent);
+    try {
+      await adapter.mkdir(path);
+    } catch {
+      // Another plugin startup path may have created it first.
+    }
+  }
+
+  private migrateLegacySecrets(): void {
+    for (const provider of SECRET_PROVIDERS) {
+      this.migrateSecret(
+        `${PLUGIN_ID}-api-key-${provider}`,
+        `${LEGACY_PLUGIN_ID}-api-key-${provider}`,
+      );
+    }
+    this.migrateSecret(CHATGPT_OAUTH_SECRET_KEY, LEGACY_CHATGPT_OAUTH_SECRET_KEY);
+  }
+
+  private migrateSecret(currentKey: string, legacyKey: string): void {
+    try {
+      const currentValue = this.app.secretStorage.getSecret(currentKey);
+      const legacyValue = this.app.secretStorage.getSecret(legacyKey);
+      if (legacyValue && !currentValue) {
+        this.app.secretStorage.setSecret(currentKey, legacyValue);
+      }
+      if (legacyValue) {
+        this.app.secretStorage.setSecret(legacyKey, "");
+      }
+    } catch {
+      // SecretStorage may be unavailable on very old Obsidian versions.
     }
   }
 }

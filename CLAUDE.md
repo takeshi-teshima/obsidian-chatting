@@ -1,4 +1,4 @@
-# Obsidian Chat
+# Chatting with AI
 
 Agentic AI chat plugin for Obsidian. Simple, mobile-first, two providers (Anthropic + OpenAI).
 
@@ -80,4 +80,4 @@ npm run svelte-check   # Svelte check
 
 ## Debug
 
-Set `DEBUG = true` in `src/agent/loop.ts` to write API calls and errors to `.obsidian/plugins/obsidian-chat/debug.log`.
+Set `DEBUG = true` in `src/agent/loop.ts` to write API calls and errors to `.obsidian/plugins/chatting-with-ai/debug.log`.

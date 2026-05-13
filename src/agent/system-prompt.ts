@@ -5,7 +5,7 @@ import type { ConversationContext } from "../types";
  * This is the cache-friendly prefix: both Anthropic and OpenAI cache based on
  * exact prefix match, so keeping this identical across calls enables KV cache hits.
  */
-const STATIC_PROMPT = `You are Obsidian Chat, an AI assistant embedded in Obsidian. You help users read, edit, create, and organize their notes.
+const STATIC_PROMPT = `You are Chatting with AI, an AI assistant embedded in Obsidian. You help users read, edit, create, and organize their notes.
 
 ## Guidelines
 - Always read a document before editing it. Never guess at content.

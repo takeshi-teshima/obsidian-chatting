@@ -57,7 +57,7 @@ export class ChatSettingTab extends PluginSettingTab {
   display(): void {
     const { containerEl } = this;
     containerEl.empty();
-    containerEl.createEl("h2", { text: "Obsidian Chatting" });
+    containerEl.createEl("h2", { text: "Chatting with AI" });
 
     const s = this.plugin.settings;
 

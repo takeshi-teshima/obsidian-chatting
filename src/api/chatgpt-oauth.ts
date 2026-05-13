@@ -56,7 +56,7 @@ const ORIGINATOR = "opencode";
  * so we set one explicitly. This is defensive — the backend may or may not
  * gate on UA, but matching the SDK's shape avoids surprises.
  */
-const USER_AGENT = "OpenAI/JS 4.x obsidian-chatting/0.1";
+const USER_AGENT = "OpenAI/JS 4.x chatting-with-ai/0.1";
 
 // We deliberately do NOT discover Codex models at runtime. The Codex
 // `/codex/models` endpoint either returns the same handful of slugs we
@@ -109,7 +109,7 @@ export async function sendChatGPTOAuthMessage(
   }
   if (!credential) {
     throw new ChatGPTOAuthError(
-      "ChatGPT OAuth is not connected. Open Settings → Obsidian Chatting → Connect ChatGPT.",
+      "ChatGPT OAuth is not connected. Open Settings -> Chatting with AI -> Connect ChatGPT.",
     );
   }
 

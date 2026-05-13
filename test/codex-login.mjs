@@ -25,7 +25,7 @@ const CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann";
 const DEVICE_REDIRECT_URI = `${ISSUER}/deviceauth/callback`;
 const VERIFICATION_URI = `${ISSUER}/codex/device`;
 const TOKEN_PATH = "temp/codex-token.json";
-const USER_AGENT = "obsidian-chatting/chatgpt-oauth-test";
+const USER_AGENT = "chatting-with-ai/chatgpt-oauth-test";
 const POLL_MARGIN_MS = 3000;
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));

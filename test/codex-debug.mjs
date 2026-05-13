@@ -9,7 +9,7 @@ const CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann";
 const CODEX_RESPONSES_URL = "https://chatgpt.com/backend-api/codex/responses";
 const TOKEN_PATH = "temp/codex-token.json";
 const ORIGINATOR = "opencode";
-const USER_AGENT = "OpenAI/JS 4.x obsidian-chatting/0.1";
+const USER_AGENT = "OpenAI/JS 4.x chatting-with-ai/0.1";
 
 async function loadAndRefresh() {
   const credential = JSON.parse(await readFile(TOKEN_PATH, "utf8"));

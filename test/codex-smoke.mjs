@@ -28,7 +28,7 @@ const TOKEN_PATH = "temp/codex-token.json";
 
 // Must match src/api/chatgpt-oauth.ts:
 const ORIGINATOR = "opencode";
-const USER_AGENT = "OpenAI/JS 4.x obsidian-chatting/0.1";
+const USER_AGENT = "OpenAI/JS 4.x chatting-with-ai/0.1";
 const EXPIRY_BUFFER_MS = 30_000;
 
 // ─── token management ──────────────────────────────────────────────────────

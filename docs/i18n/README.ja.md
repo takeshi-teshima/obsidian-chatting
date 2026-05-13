@@ -1,4 +1,4 @@
-# Obsidian Chatting
+# Chatting with AI
 
 [![最新リリース](https://img.shields.io/github/v/release/o1xhack/obsidian-chatting?include_prereleases&label=release&color=7c3aed)](https://github.com/o1xhack/obsidian-chatting/releases)
 [![ダウンロード総数](https://img.shields.io/github/downloads/o1xhack/obsidian-chatting/total?color=7c3aed)](https://github.com/o1xhack/obsidian-chatting/releases)
@@ -80,8 +80,8 @@
 ## 🚀 クイックスタート
 
 1. [BRAT](https://github.com/TfTHacker/obsidian42-brat) からインストール → **Add Beta plugin** → `o1xhack/obsidian-chatting`
-2. Community Plugins で **Obsidian Chatting** を有効化
-3. **設定 → Obsidian Chatting** → プロバイダを選び、API キーを貼り付け(または **Connect ChatGPT** をクリック)
+2. Community Plugins で **Chatting with AI** を有効化
+3. **設定 → Chatting with AI** → プロバイダを選び、API キーを貼り付け(または **Connect ChatGPT** をクリック)
 4. リボンアイコンまたはコマンドパレットからチャットを開く
 
 ## 📦 インストール
@@ -94,7 +94,7 @@ BRAT は GitHub から直接ベータ版プラグインをインストールし�
 1. Community Plugins から [BRAT](https://github.com/TfTHacker/obsidian42-brat) をインストール
 2. **コマンドパレット → BRAT: Add a beta plugin for testing**
 3. `o1xhack/obsidian-chatting` を入力
-4. Community Plugins で **Obsidian Chatting** を有効化
+4. Community Plugins で **Chatting with AI** を有効化
 
 </details>
 
@@ -102,8 +102,8 @@ BRAT は GitHub から直接ベータ版プラグインをインストールし�
 <summary><b>手動インストール</b></summary>
 
 1. [最新リリース](https://github.com/o1xhack/obsidian-chatting/releases/latest) から `main.js`、`manifest.json`、`styles.css` をダウンロード
-2. `<vault>/.obsidian/plugins/obsidian-chatting/` に配置
-3. Obsidian を再読み込みし、Community Plugins で **Obsidian Chatting** を有効化
+2. `<vault>/.obsidian/plugins/chatting-with-ai/` に配置
+3. Obsidian を再読み込みし、Community Plugins で **Chatting with AI** を有効化
 
 </details>
 
@@ -120,7 +120,7 @@ npm run build
 テスト用 vault にシンボリックリンク:
 
 ```bash
-ln -s "$(pwd)" /path/to/vault/.obsidian/plugins/obsidian-chatting
+ln -s "$(pwd)" /path/to/vault/.obsidian/plugins/chatting-with-ai
 ```
 
 </details>
@@ -182,7 +182,7 @@ ln -s "$(pwd)" /path/to/vault/.obsidian/plugins/obsidian-chatting
 <details>
 <summary><b>チャット履歴はどこに保存され、同期されますか?</b></summary>
 
-ローカルの `<vault>/.obsidian/plugins/obsidian-chatting/chat-state.json` に保存されます。**Obsidian Sync は既定でプラグインデータファイルを除外する**ため、同期されません。API キーは SecretStorage 経由で OS のキーチェーンに保存され、これも同期されません。
+ローカルの `<vault>/.obsidian/plugins/chatting-with-ai/chat-state.json` に保存されます。**Obsidian Sync は既定でプラグインデータファイルを除外する**ため、同期されません。API キーは SecretStorage 経由で OS のキーチェーンに保存され、これも同期されません。
 
 </details>
 
@@ -196,7 +196,7 @@ Issue と PR を歓迎します。PR を出す前に:
 
 ## 🙏 謝辞
 
-元々は [omarshahine/obsidian-chat](https://github.com/omarshahine/obsidian-chat)(MIT)から派生したもので、原版の著作権表示は `LICENSE` に保持されています。Obsidian Chatting は現在、独自のロードマップを持つ独立プロジェクトです —— 主な書き換えには agent ループ、モバイルパリティ対応、ChatGPT アカウントプロバイダ、選択範囲スコープ機能が含まれます。
+元々は [omarshahine/obsidian-chat](https://github.com/omarshahine/obsidian-chat)(MIT)から派生したもので、原版の著作権表示は `LICENSE` に保持されています。Chatting with AI は現在、独自のロードマップを持つ独立プロジェクトです —— 主な書き換えには agent ループ、モバイルパリティ対応、ChatGPT アカウントプロバイダ、選択範囲スコープ機能が含まれます。
 
 ## 📄 ライセンス
 

@@ -28,7 +28,8 @@ export interface ChatGPTOAuthCredential {
 // Obsidian's SecretStorage validates IDs as "lowercase alphanumeric with
 // optional dashes" — no colons or uppercase. Keep this in sync with the
 // plugin id so the OS keychain entries are easy to identify.
-const OAUTH_SECRET_KEY = "obsidian-chatting-chatgpt-oauth";
+const OAUTH_SECRET_KEY = "chatting-with-ai-chatgpt-oauth";
+const LEGACY_OAUTH_SECRET_KEY = "obsidian-chatting-chatgpt-oauth";
 const EXPIRY_BUFFER_MS = 30_000;
 
 export class ChatGPTOAuthStore {
@@ -38,7 +39,10 @@ export class ChatGPTOAuthStore {
   get(): ChatGPTOAuthCredential | null {
     let raw: string | null = null;
     try {
-      raw = this.app.secretStorage.getSecret(OAUTH_SECRET_KEY) ?? null;
+      raw =
+        this.app.secretStorage.getSecret(OAUTH_SECRET_KEY) ??
+        this.app.secretStorage.getSecret(LEGACY_OAUTH_SECRET_KEY) ??
+        null;
     } catch {
       return null;
     }

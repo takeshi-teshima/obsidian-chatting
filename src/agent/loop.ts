@@ -27,7 +27,7 @@ function debugLog(app: App, label: string, data: unknown): void {
     const entry = `\n--- ${label} [${timestamp}] ---\n${JSON.stringify(data, null, 2)}\n`;
     // Use the adapter to write outside the vault
     app.vault.adapter.append(
-      ".obsidian/plugins/obsidian-chatting/debug.log",
+      ".obsidian/plugins/chatting-with-ai/debug.log",
       entry
     );
   } catch {
@@ -81,7 +81,7 @@ export class AgentLoop {
     const systemPrompt = buildSystemPrompt();
 
     const parts: string[] = [
-      `# Obsidian Chat Transcript`,
+      `# Chatting with AI Transcript`,
       ``,
       `**Date:** ${new Date().toISOString()}`,
       `**Provider:** ${this.settings.provider}`,

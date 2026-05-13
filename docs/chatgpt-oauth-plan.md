@@ -167,7 +167,7 @@ Use Obsidian `SecretStorage`. Never `data.json`, never conversation state, never
 ```ts
 // Obsidian's SecretStorage validates IDs as lowercase alphanumeric + dashes only.
 // No colons, no uppercase. Keys must match that grammar.
-const CHATGPT_OAUTH_SECRET_KEY = "obsidian-chatting-chatgpt-oauth";
+const CHATGPT_OAUTH_SECRET_KEY = "chatting-with-ai-chatgpt-oauth";
 
 // Save
 app.secretStorage.setSecret(

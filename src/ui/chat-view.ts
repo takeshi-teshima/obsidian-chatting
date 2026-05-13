@@ -8,7 +8,7 @@ import { getModelDisplayName } from "../settings";
 export const VIEW_TYPE_CHAT = "ochatting-view";
 
 /**
- * Chat view for Obsidian Chatting.
+ * Chat view for Chatting with AI.
  * Desktop: right sidebar. Mobile: right sidebar (slides in from edge).
  * Uses the plugin's shared AgentLoop and chatHistory so conversations
  * survive the view being closed and reopened (e.g. sidebar toggle).
@@ -30,7 +30,7 @@ export class ObsidianChatView extends ItemView {
   getDisplayText(): string {
     // Distinct from upstream "Chat" tab so users running both plugins
     // side-by-side can tell the workspace tabs apart.
-    return "Chatting";
+    return "Chatting with AI";
   }
 
   getIcon(): string {
