@@ -57,8 +57,6 @@ export class ChatSettingTab extends PluginSettingTab {
   display(): void {
     const { containerEl } = this;
     containerEl.empty();
-    new Setting(containerEl).setName("Chatting with AI").setHeading();
-
     const s = this.plugin.settings;
 
     // ─── Provider ─────────────────────────────────────────────────────

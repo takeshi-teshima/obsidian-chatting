@@ -96,7 +96,8 @@ export class ObsidianChatView extends ItemView {
 
   /** Programmatically send a message */
   sendMessage(text: string): void {
-    this.handleUserMessage(text, this.chatContainer?.getSelection() ?? null);
+    const selection = this.chatContainer?.getSelection() as SelectionScope | null | undefined;
+    void this.handleUserMessage(text, selection ?? null);
   }
 
   /** Set the selection scope and show the pill */
