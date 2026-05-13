@@ -316,8 +316,8 @@ export default class ChatPlugin extends Plugin {
   // ─── Settings persistence ────────────────────────────────────────────
 
   async loadSettings(): Promise<void> {
-    const saved = (await this.loadData()) || {};
-    this.settings = Object.assign({}, DEFAULT_SETTINGS, saved);
+    const saved = normalizeSettings(await this.loadData());
+    this.settings = { ...DEFAULT_SETTINGS, ...saved };
 
     // Fall back to default model if saved model is empty
     if (!this.settings.model) {
@@ -492,6 +492,25 @@ function isPersistedChatState(value: unknown): value is {
   chatHistory?: ChatPlugin["chatHistory"];
   agentMessages?: Parameters<AgentLoop["importMessages"]>[0];
 } {
+  return typeof value === "object" && value !== null;
+}
+
+function normalizeSettings(value: unknown): Partial<ChatSettings> {
+  if (!isRecord(value)) return {};
+  const settings: Partial<ChatSettings> = {};
+  if (isProvider(value.provider)) settings.provider = value.provider;
+  if (typeof value.apiKey === "string") settings.apiKey = value.apiKey;
+  if (typeof value.model === "string") settings.model = value.model;
+  if (typeof value.maxIterations === "number") settings.maxIterations = value.maxIterations;
+  if (typeof value.enableWebSearch === "boolean") settings.enableWebSearch = value.enableWebSearch;
+  return settings;
+}
+
+function isProvider(value: unknown): value is ChatSettings["provider"] {
+  return value === "anthropic" || value === "openai" || value === "chatgpt-oauth";
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 

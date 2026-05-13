@@ -96,30 +96,30 @@ export async function sendAnthropicMessage(
     });
   } catch (e: unknown) {
     // requestUrl throws on network errors; extract API details if available
-    const err = e as { status?: number; json?: { error?: { message?: string } } };
-    const apiMsg = err.json?.error?.message;
+    const err = asRecord(e);
+    const status = typeof err.status === "number" ? err.status : "unknown";
+    const apiMsg = getNestedString(err, ["json", "error", "message"]);
     if (apiMsg) {
-      throw new Error(`Anthropic API error (${err.status}): ${apiMsg}`);
+      throw new Error(`Anthropic API error (${status}): ${apiMsg}`);
     }
     throw e;
   }
 
   if (response.status !== 200) {
-    const errorText = typeof response.json?.error?.message === "string"
-      ? response.json.error.message
-      : `HTTP ${response.status}`;
+    const responseJson = response.json as unknown;
+    const errorText = getNestedString(responseJson, ["error", "message"]) ?? `HTTP ${response.status}`;
     throw new Error(`Anthropic API error (${response.status}): ${errorText}`);
   }
 
-  const data = response.json;
+  const data = parseAnthropicResponse(response.json as unknown);
 
   return {
-    content: (data.content as AnthropicContentBlock[])
+    content: data.content
       .map(fromAnthropicBlock)
       .filter((b): b is ContentBlock => b !== null),
-    stopReason: data.stop_reason === "end_turn" ? "end_turn" : data.stop_reason,
+    stopReason: normalizeStopReason(data.stop_reason),
     usage: data.usage
-      ? { inputTokens: data.usage.input_tokens, outputTokens: data.usage.output_tokens }
+      ? { inputTokens: data.usage.input_tokens ?? 0, outputTokens: data.usage.output_tokens ?? 0 }
       : undefined,
   };
 }
@@ -134,6 +134,84 @@ interface AnthropicContentBlock {
   name?: string;
   input?: Record<string, unknown>;
   search_results?: Array<{ title: string; url: string; snippet: string }>;
+}
+
+interface AnthropicResponse {
+  content: AnthropicContentBlock[];
+  stop_reason?: string;
+  usage?: {
+    input_tokens?: number;
+    output_tokens?: number;
+  };
+}
+
+function parseAnthropicResponse(value: unknown): AnthropicResponse {
+  if (!isRecord(value)) return { content: [] };
+  const content = Array.isArray(value.content)
+    ? value.content.filter(isRecord).map(toAnthropicContentBlock)
+    : [];
+  const usage = isRecord(value.usage)
+    ? {
+        input_tokens: typeof value.usage.input_tokens === "number" ? value.usage.input_tokens : 0,
+        output_tokens: typeof value.usage.output_tokens === "number" ? value.usage.output_tokens : 0,
+      }
+    : undefined;
+  return {
+    content,
+    stop_reason: typeof value.stop_reason === "string" ? value.stop_reason : undefined,
+    usage,
+  };
+}
+
+function toAnthropicContentBlock(value: Record<string, unknown>): AnthropicContentBlock {
+  return {
+    type: isAnthropicBlockType(value.type) ? value.type : "text",
+    text: typeof value.text === "string" ? value.text : undefined,
+    thinking: typeof value.thinking === "string" ? value.thinking : undefined,
+    id: typeof value.id === "string" ? value.id : undefined,
+    name: typeof value.name === "string" ? value.name : undefined,
+    input: isRecord(value.input) ? value.input : undefined,
+    search_results: Array.isArray(value.search_results)
+      ? value.search_results.filter(isSearchResult)
+      : undefined,
+  };
+}
+
+function isAnthropicBlockType(value: unknown): value is AnthropicContentBlock["type"] {
+  return value === "text" ||
+    value === "tool_use" ||
+    value === "web_search_tool_result" ||
+    value === "server_tool_use" ||
+    value === "thinking";
+}
+
+function isSearchResult(value: unknown): value is { title: string; url: string; snippet: string } {
+  return isRecord(value) &&
+    typeof value.title === "string" &&
+    typeof value.url === "string" &&
+    typeof value.snippet === "string";
+}
+
+function normalizeStopReason(value: string | undefined): UnifiedResponse["stopReason"] {
+  if (value === "tool_use" || value === "max_tokens" || value === "stop") return value;
+  return "end_turn";
+}
+
+function getNestedString(value: unknown, path: string[]): string | undefined {
+  let current: unknown = value;
+  for (const key of path) {
+    if (!isRecord(current)) return undefined;
+    current = current[key];
+  }
+  return typeof current === "string" ? current : undefined;
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return isRecord(value) ? value : {};
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
 }
 
 function toAnthropicMessage(msg: UnifiedMessage): Record<string, unknown> {

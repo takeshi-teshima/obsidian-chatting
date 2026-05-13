@@ -1,11 +1,39 @@
-import { ItemView, WorkspaceLeaf, Notice } from "obsidian";
+import { ItemView, WorkspaceLeaf, Notice, type App } from "obsidian";
 import { mount, unmount } from "svelte";
+import type { Component } from "svelte";
 import type ChatPlugin from "../main";
 import ChatContainer from "./ChatContainer.svelte";
 import type { ToolResult, SelectionScope } from "../types";
 import { getModelDisplayName } from "../settings";
 
 export const VIEW_TYPE_CHAT = "ochatting-view";
+
+interface ChatContainerProps {
+  app: App;
+  component: ObsidianChatView;
+  provider: string;
+  model: string;
+  onSend: (text: string, selection: SelectionScope | null) => void;
+  onClear: () => void;
+  onStop: () => void;
+}
+
+interface ChatContainerApi extends Record<string, unknown> {
+  addUserMessage(text: string): void;
+  addAssistantMessage(text: string): void;
+  addToolCall(name: string, input: Record<string, unknown>): number;
+  updateToolResult(msgId: number, name: string, result: ToolResult): void;
+  addError(text: string): void;
+  showThinking(): void;
+  hideThinking(): void;
+  showAskUser(question: string): Promise<string>;
+  setInputEnabled(enabled: boolean): void;
+  clearMessages(): void;
+  focus(): void;
+  setModel(name: string): void;
+  setSelection(selection: SelectionScope): void;
+  getSelection(): SelectionScope | null;
+}
 
 /**
  * Chat view for Chatting with AI.
@@ -15,7 +43,7 @@ export const VIEW_TYPE_CHAT = "ochatting-view";
  */
 export class ObsidianChatView extends ItemView {
   private plugin: ChatPlugin;
-  private chatContainer: ReturnType<typeof ChatContainer> | undefined;
+  private chatContainer: ChatContainerApi | undefined;
   private running = false;
 
   constructor(leaf: WorkspaceLeaf, plugin: ChatPlugin) {
@@ -42,7 +70,9 @@ export class ObsidianChatView extends ItemView {
     container.empty();
     container.addClass("ochatting-view-container");
 
-    this.chatContainer = mount(ChatContainer, {
+    this.chatContainer = mount<ChatContainerProps, ChatContainerApi>(
+      ChatContainer as unknown as Component<ChatContainerProps, ChatContainerApi>,
+      {
       target: container,
       props: {
         app: this.app,
@@ -96,8 +126,7 @@ export class ObsidianChatView extends ItemView {
 
   /** Programmatically send a message */
   sendMessage(text: string): void {
-    const selection = this.chatContainer?.getSelection() as SelectionScope | null | undefined;
-    void this.handleUserMessage(text, selection ?? null);
+    void this.handleUserMessage(text, this.chatContainer?.getSelection() ?? null);
   }
 
   /** Set the selection scope and show the pill */

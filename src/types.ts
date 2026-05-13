@@ -60,7 +60,7 @@ export interface UnifiedToolDef {
 
 export interface UnifiedResponse {
   content: ContentBlock[];
-  stopReason: "end_turn" | "tool_use" | "max_tokens" | "stop" | string;
+  stopReason: "end_turn" | "tool_use" | "max_tokens" | "stop";
   usage?: {
     inputTokens: number;
     outputTokens: number;

@@ -197,9 +197,11 @@ async function sendOnce(
       throw: false,
     });
   } catch (e: unknown) {
-    const err = e as { status?: number; message?: string };
+    const err = asRecord(e);
+    const status = typeof err.status === "number" || typeof err.status === "string" ? String(err.status) : "";
+    const message = typeof err.message === "string" ? err.message : String(e);
     throw new ChatGPTOAuthError(
-      `ChatGPT OAuth request failed (${err.status ?? ""}): ${err.message ?? String(e)}`,
+      `ChatGPT OAuth request failed (${status}): ${message}`,
     );
   }
 
@@ -216,21 +218,20 @@ async function sendOnce(
     // The .json access is wrapped in try/catch because iOS Obsidian's
     // lazy `response.json` getter throws on any non-JSON body — see the
     // long comment in parseResponseBody().
-    let json:
-      | { error?: { message?: string }; detail?: string | { message?: string } }
-      | undefined;
+    let json: Record<string, unknown> | undefined;
     try {
-      json = response.json as typeof json;
+      json = asOptionalRecord(response.json);
     } catch {
       json = undefined;
     }
+    const detail = json?.detail;
     const detailText =
-      typeof json?.detail === "string"
-        ? json.detail
-        : json?.detail?.message;
+      typeof detail === "string"
+        ? detail
+        : getNestedString(detail, ["message"]);
     const apiMsg =
       detailText ??
-      json?.error?.message ??
+      getNestedString(json, ["error", "message"]) ??
       response.text?.slice(0, 300) ??
       `HTTP ${response.status}`;
     const err = new ChatGPTOAuthError(
@@ -262,9 +263,7 @@ function parseResponseBody(response: {
   // the SSE text parser below.
   let jsonObj: Record<string, unknown> | undefined;
   try {
-    if (response.json && typeof response.json === "object") {
-      jsonObj = response.json as Record<string, unknown>;
-    }
+    jsonObj = asOptionalRecord(response.json);
   } catch {
     jsonObj = undefined;
   }
@@ -299,23 +298,19 @@ function parseResponseBody(response: {
   let failureMessage: string | null = null;
 
   for (const evt of events) {
-    const type = evt.type as string | undefined;
+    const type = stringValue(evt.type);
     if (type === "response.output_item.done") {
-      const item = evt.item as Record<string, unknown> | undefined;
+      const item = asOptionalRecord(evt.item);
       if (item) {
-        const key =
-          (evt.output_index as string | number | undefined) ??
-          (item.id as string | undefined) ??
-          itemByIndex.size;
+        const key = outputKey(evt.output_index) ?? (stringValue(item.id) || itemByIndex.size);
         itemByIndex.set(key, item);
       }
     } else if (type === "response.completed") {
-      completedResponse = (evt.response as Record<string, unknown>) ?? {};
+      completedResponse = asOptionalRecord(evt.response) ?? {};
     } else if (type === "response.incomplete") {
-      completedResponse = (evt.response as Record<string, unknown>) ?? {};
+      completedResponse = asOptionalRecord(evt.response) ?? {};
     } else if (type === "response.failed") {
-      const err = (evt.response as { error?: { message?: string } })?.error;
-      failureMessage = err?.message ?? "ChatGPT OAuth response failed";
+      failureMessage = getNestedString(evt.response, ["error", "message"]) ?? "ChatGPT OAuth response failed";
     } else if (type === "error" && typeof evt.message === "string") {
       failureMessage = evt.message;
     }
@@ -356,7 +351,8 @@ function parseSSE(text: string): Array<Record<string, unknown>> {
     const payload = dataLines.join("\n");
     if (payload === "[DONE]") continue;
     try {
-      events.push(JSON.parse(payload));
+      const event: unknown = JSON.parse(payload);
+      if (isRecord(event)) events.push(event);
     } catch {
       // ignore malformed event
     }
@@ -419,13 +415,13 @@ function buildFullHistoryInput(
 // ─── Response parsing (mirrors openai.ts) ───────────────────────────────────
 
 function fromResponsesOutput(data: Record<string, unknown>): UnifiedResponse {
-  const output = (data.output || []) as Array<Record<string, unknown>>;
+  const output = Array.isArray(data.output) ? data.output.filter(isRecord) : [];
   const content: ContentBlock[] = [];
   let hasToolCalls = false;
 
   for (const item of output) {
     if (item.type === "message" && Array.isArray(item.content)) {
-      for (const part of item.content as Array<Record<string, unknown>>) {
+      for (const part of item.content.filter(isRecord)) {
         if (part.type === "output_text" && typeof part.text === "string") {
           content.push({ type: "text", text: part.text });
         }
@@ -434,27 +430,61 @@ function fromResponsesOutput(data: Record<string, unknown>): UnifiedResponse {
       hasToolCalls = true;
       let input: Record<string, unknown> = {};
       try {
-        input = JSON.parse((item.arguments as string) || "{}");
+        const parsed: unknown = JSON.parse(typeof item.arguments === "string" ? item.arguments : "{}");
+        input = isRecord(parsed) ? parsed : { _raw: parsed };
       } catch {
         input = { _raw: item.arguments };
       }
       content.push({
         type: "tool_use",
-        id: (item.call_id || item.id) as string,
-        name: item.name as string,
+        id: stringValue(item.call_id) || stringValue(item.id),
+        name: stringValue(item.name),
         input,
       });
     }
   }
 
   const stopReason = hasToolCalls ? "tool_use" : "end_turn";
-  const usage = data.usage as { input_tokens?: number; output_tokens?: number } | undefined;
+  const usage = isRecord(data.usage) ? data.usage : undefined;
 
   return {
     content,
     stopReason,
     usage: usage
-      ? { inputTokens: usage.input_tokens || 0, outputTokens: usage.output_tokens || 0 }
+      ? { inputTokens: numberValue(usage.input_tokens), outputTokens: numberValue(usage.output_tokens) }
       : undefined,
   };
+}
+
+function numberValue(value: unknown): number {
+  return typeof value === "number" ? value : 0;
+}
+
+function stringValue(value: unknown): string {
+  return typeof value === "string" ? value : "";
+}
+
+function outputKey(value: unknown): string | number | undefined {
+  return typeof value === "string" || typeof value === "number" ? value : undefined;
+}
+
+function getNestedString(value: unknown, path: string[]): string | undefined {
+  let current: unknown = value;
+  for (const key of path) {
+    if (!isRecord(current)) return undefined;
+    current = current[key];
+  }
+  return typeof current === "string" ? current : undefined;
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return isRecord(value) ? value : {};
+}
+
+function asOptionalRecord(value: unknown): Record<string, unknown> | undefined {
+  return isRecord(value) ? value : undefined;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
 }

@@ -87,23 +87,25 @@ export async function sendOpenAIMessage(
       throw: false,
     });
   } catch (e: unknown) {
-    const err = e as Record<string, unknown>;
-    const apiMsg = (err.json as { error?: { message?: string } })?.error?.message;
+    const err = asRecord(e);
+    const status = typeof err.status === "number" || typeof err.status === "string" ? String(err.status) : "";
+    const message = typeof err.message === "string" ? err.message : String(e);
+    const apiMsg = getNestedString(err, ["json", "error", "message"]);
     if (apiMsg) {
-      throw new Error(`OpenAI API error (${err.status}): ${apiMsg}`);
+      throw new Error(`OpenAI API error (${status || "unknown"}): ${apiMsg}`);
     }
-    throw new Error(`OpenAI request failed (${err.status || ""}): ${err.message || String(e)}`);
+    throw new Error(`OpenAI request failed (${status}): ${message}`);
   }
 
   if (response.status !== 200) {
-    const errorBody = response.json?.error?.message || `HTTP ${response.status}`;
+    const errorBody = getNestedString(response.json as unknown, ["error", "message"]) ?? `HTTP ${response.status}`;
     throw new Error(`OpenAI API error (${response.status}): ${errorBody}`);
   }
 
-  const data = response.json;
+  const data = asRecord(response.json as unknown);
 
   // Store response ID for chaining
-  previousResponseId = data.id || null;
+  previousResponseId = typeof data.id === "string" ? data.id : null;
 
   return fromResponsesOutput(data);
 }
@@ -185,13 +187,13 @@ function buildCurrentTurnInput(
 // ─── Response Parsing ───────────────────────────────────────────────────────
 
 function fromResponsesOutput(data: Record<string, unknown>): UnifiedResponse {
-  const output = (data.output || []) as Array<Record<string, unknown>>;
+  const output = Array.isArray(data.output) ? data.output.filter(isRecord) : [];
   const content: ContentBlock[] = [];
   let hasToolCalls = false;
 
   for (const item of output) {
     if (item.type === "message" && Array.isArray(item.content)) {
-      for (const part of item.content as Array<Record<string, unknown>>) {
+      for (const part of item.content.filter(isRecord)) {
         if (part.type === "output_text" && typeof part.text === "string") {
           content.push({ type: "text", text: part.text });
         }
@@ -200,27 +202,53 @@ function fromResponsesOutput(data: Record<string, unknown>): UnifiedResponse {
       hasToolCalls = true;
       let input: Record<string, unknown> = {};
       try {
-        input = JSON.parse((item.arguments as string) || "{}");
+        const parsed: unknown = JSON.parse(typeof item.arguments === "string" ? item.arguments : "{}");
+        input = isRecord(parsed) ? parsed : { _raw: parsed };
       } catch {
         input = { _raw: item.arguments };
       }
       content.push({
         type: "tool_use",
-        id: (item.call_id || item.id) as string,
-        name: item.name as string,
+        id: stringValue(item.call_id) || stringValue(item.id),
+        name: stringValue(item.name),
         input,
       });
     }
   }
 
   const stopReason = hasToolCalls ? "tool_use" : "end_turn";
-  const usage = data.usage as { input_tokens?: number; output_tokens?: number } | undefined;
+  const usage = isRecord(data.usage) ? data.usage : undefined;
 
   return {
     content,
     stopReason,
     usage: usage
-      ? { inputTokens: usage.input_tokens || 0, outputTokens: usage.output_tokens || 0 }
+      ? { inputTokens: numberValue(usage.input_tokens), outputTokens: numberValue(usage.output_tokens) }
       : undefined,
   };
+}
+
+function numberValue(value: unknown): number {
+  return typeof value === "number" ? value : 0;
+}
+
+function stringValue(value: unknown): string {
+  return typeof value === "string" ? value : "";
+}
+
+function getNestedString(value: unknown, path: string[]): string | undefined {
+  let current: unknown = value;
+  for (const key of path) {
+    if (!isRecord(current)) return undefined;
+    current = current[key];
+  }
+  return typeof current === "string" ? current : undefined;
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return isRecord(value) ? value : {};
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
 }

@@ -10,7 +10,7 @@ type AskUserCallback = (question: string) => Promise<string>;
  * - cachedRead() for display-only reads
  * - vault.process() for atomic edits
  * - fileManager.renameFile() for link-aware renames
- * - vault.trash() for safe deletes
+ * - fileManager.trashFile() for safe deletes
  */
 export async function executeTool(
   app: App,
@@ -82,15 +82,32 @@ function findFrontmatterEnd(content: string): number {
   return secondDash + 3;
 }
 
+function optionalString(value: unknown): string | undefined {
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+function requiredString(value: unknown): string {
+  return typeof value === "string" ? value : "";
+}
+
+function requiredRecord(value: unknown): Record<string, unknown> | null {
+  return isRecord(value) ? value : null;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
 // ─── Tool Implementations ───────────────────────────────────────────────────
 
 async function readDocument(
   app: App,
   input: Record<string, unknown>
 ): Promise<ToolResult> {
-  const file = resolveFile(app, input.path as string | undefined);
+  const path = optionalString(input.path);
+  const file = resolveFile(app, path);
   if (!file) {
-    return { result: input.path ? `File not found: ${input.path}` : "No active document open.", isError: true };
+    return { result: path ? `File not found: ${path}` : "No active document open.", isError: true };
   }
 
   // cachedRead() is faster for display-only reads
@@ -102,14 +119,15 @@ async function editDocument(
   app: App,
   input: Record<string, unknown>
 ): Promise<ToolResult> {
-  const operation = input.operation as string;
-  const content = input.content as string;
-  const find = input.find as string | undefined;
-  const position = input.position as string | undefined;
+  const operation = requiredString(input.operation);
+  const content = requiredString(input.content);
+  const find = optionalString(input.find);
+  const position = optionalString(input.position);
 
-  const file = resolveFile(app, input.path as string | undefined);
+  const path = optionalString(input.path);
+  const file = resolveFile(app, path);
   if (!file) {
-    return { result: input.path ? `File not found: ${input.path}` : "No active document open.", isError: true };
+    return { result: path ? `File not found: ${path}` : "No active document open.", isError: true };
   }
 
   switch (operation) {
@@ -187,7 +205,7 @@ async function searchVault(
   app: App,
   input: Record<string, unknown>
 ): Promise<ToolResult> {
-  const query = (input.query as string).toLowerCase();
+  const query = requiredString(input.query).toLowerCase();
   const searchContent = input.searchContent as boolean | undefined;
   const limit = Math.min((input.limit as number) || 10, 50);
 
@@ -217,7 +235,7 @@ async function searchVault(
   }
 
   if (results.length === 0) {
-    return { result: `No results found for "${input.query}".`, isError: false };
+    return { result: `No results found for "${query}".`, isError: false };
   }
 
   return {
@@ -230,7 +248,7 @@ async function readFile(
   app: App,
   input: Record<string, unknown>
 ): Promise<ToolResult> {
-  const path = input.path as string;
+  const path = requiredString(input.path);
   if (!path) {
     return { result: "'path' parameter is required.", isError: true };
   }
@@ -248,8 +266,8 @@ async function createFile(
   app: App,
   input: Record<string, unknown>
 ): Promise<ToolResult> {
-  const path = normalizePath(input.path as string);
-  const content = input.content as string;
+  const path = normalizePath(requiredString(input.path));
+  const content = requiredString(input.content);
 
   if (!path) {
     return { result: "'path' parameter is required.", isError: true };
@@ -268,8 +286,8 @@ async function listFiles(
   app: App,
   input: Record<string, unknown>
 ): Promise<ToolResult> {
-  const folder = input.folder as string | undefined;
-  const extension = input.extension as string | undefined;
+  const folder = optionalString(input.folder);
+  const extension = optionalString(input.extension);
 
   let files = app.vault.getFiles();
 
@@ -303,8 +321,8 @@ async function renameFile(
   app: App,
   input: Record<string, unknown>
 ): Promise<ToolResult> {
-  const path = input.path as string;
-  const newPath = input.new_path as string;
+  const path = requiredString(input.path);
+  const newPath = requiredString(input.new_path);
 
   if (!path || !newPath) {
     return { result: "Both 'path' and 'new_path' parameters are required.", isError: true };
@@ -332,7 +350,7 @@ async function deleteFile(
   app: App,
   input: Record<string, unknown>
 ): Promise<ToolResult> {
-  const path = input.path as string;
+  const path = requiredString(input.path);
   if (!path) {
     return { result: "'path' parameter is required.", isError: true };
   }
@@ -342,8 +360,8 @@ async function deleteFile(
     return { result: `File not found: ${path}`, isError: true };
   }
 
-  // vault.trash() respects user's trash setting (.trash or system trash)
-  await app.vault.trash(file, true);
+  // fileManager.trashFile() respects the user's file deletion preference.
+  await app.fileManager.trashFile(file);
   return { result: `Moved ${path} to trash.`, isError: false };
 }
 
@@ -351,9 +369,10 @@ async function getProperties(
   app: App,
   input: Record<string, unknown>
 ): Promise<ToolResult> {
-  const file = resolveFile(app, input.path as string | undefined);
+  const path = optionalString(input.path);
+  const file = resolveFile(app, path);
   if (!file) {
-    return { result: input.path ? `File not found: ${input.path}` : "No active document open.", isError: true };
+    return { result: path ? `File not found: ${path}` : "No active document open.", isError: true };
   }
 
   const cache = app.metadataCache.getFileCache(file);
@@ -374,14 +393,15 @@ async function setProperties(
   app: App,
   input: Record<string, unknown>
 ): Promise<ToolResult> {
-  const props = input.properties as Record<string, unknown>;
-  if (!props || typeof props !== "object") {
+  const props = requiredRecord(input.properties);
+  if (!props) {
     return { result: "'properties' parameter must be an object.", isError: true };
   }
 
-  const file = resolveFile(app, input.path as string | undefined);
+  const path = optionalString(input.path);
+  const file = resolveFile(app, path);
   if (!file) {
-    return { result: input.path ? `File not found: ${input.path}` : "No active document open.", isError: true };
+    return { result: path ? `File not found: ${path}` : "No active document open.", isError: true };
   }
 
   // Use Obsidian's built-in processFrontMatter for safe YAML handling
@@ -408,9 +428,10 @@ async function getBacklinks(
   app: App,
   input: Record<string, unknown>
 ): Promise<ToolResult> {
-  const file = resolveFile(app, input.path as string | undefined);
+  const path = optionalString(input.path);
+  const file = resolveFile(app, path);
   if (!file) {
-    return { result: input.path ? `File not found: ${input.path}` : "No active document open.", isError: true };
+    return { result: path ? `File not found: ${path}` : "No active document open.", isError: true };
   }
 
   // resolvedLinks maps: source path -> { target path -> link count }
@@ -459,7 +480,7 @@ async function openDocument(
   app: App,
   input: Record<string, unknown>
 ): Promise<ToolResult> {
-  const path = input.path as string;
+  const path = requiredString(input.path);
   if (!path) {
     return { result: "'path' parameter is required.", isError: true };
   }
@@ -479,7 +500,7 @@ async function askUser(
   input: Record<string, unknown>,
   onAskUser: AskUserCallback
 ): Promise<ToolResult> {
-  const question = input.question as string;
+  const question = requiredString(input.question);
   if (!question) {
     return { result: "'question' parameter is required.", isError: true };
   }

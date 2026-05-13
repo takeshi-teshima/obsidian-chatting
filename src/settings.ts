@@ -488,11 +488,12 @@ async function fetchAnthropicModels(apiKey: string): Promise<ModelOption[]> {
     throw new Error(e instanceof Error ? e.message : String(e));
   }
 
-  const models = (response.json?.data || [])
-    .filter((m: { type?: string }) => m.type === "model")
-    .map((m: { id: string; display_name?: string }) => ({
+  const models = getModelRecords(response.json as unknown)
+    .filter((m) => m.type === "model")
+    .filter((m): m is ModelRecord & { id: string } => typeof m.id === "string")
+    .map((m) => ({
       value: m.id,
-      label: m.display_name || m.id,
+      label: typeof m.display_name === "string" ? m.display_name : m.id,
     }))
     .sort((a: ModelOption, b: ModelOption) => {
       const da = a.value.match(/(\d{8})/)?.[1] || "";
@@ -518,16 +519,37 @@ async function fetchOpenAIModels(apiKey: string): Promise<ModelOption[]> {
   const chatPrefixes = ["gpt-", "o1", "o3", "o4", "chatgpt-", "codex-", "gpt5"];
   const excludePatterns = ["realtime", "audio", "transcri", "search"];
 
-  const models = (response.json?.data || [])
-    .filter((m: { id: string }) => {
+  const models = getModelRecords(response.json as unknown)
+    .filter((m): m is ModelRecord & { id: string } => typeof m.id === "string")
+    .filter((m) => {
       const id = m.id.toLowerCase();
       return chatPrefixes.some((p) => id.startsWith(p)) &&
         !excludePatterns.some((p) => id.includes(p));
     })
-    .sort((a: { created?: number }, b: { created?: number }) =>
-      (b.created || 0) - (a.created || 0)
+    .sort((a, b) =>
+      numberValue(b.created) - numberValue(a.created)
     )
-    .map((m: { id: string }) => ({ value: m.id, label: m.id }));
+    .map((m) => ({ value: m.id, label: m.id }));
 
   return models.length > 0 ? models : FALLBACK_MODELS.openai;
+}
+
+interface ModelRecord {
+  id?: unknown;
+  type?: unknown;
+  display_name?: unknown;
+  created?: unknown;
+}
+
+function getModelRecords(value: unknown): ModelRecord[] {
+  if (!isRecord(value) || !Array.isArray(value.data)) return [];
+  return value.data.filter(isRecord);
+}
+
+function numberValue(value: unknown): number {
+  return typeof value === "number" ? value : 0;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
 }
