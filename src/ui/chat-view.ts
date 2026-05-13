@@ -49,8 +49,9 @@ export class ObsidianChatView extends ItemView {
         component: this,
         provider: this.plugin.settings.provider,
         model: getModelDisplayName(this.plugin.settings.provider, this.plugin.settings.model),
-        onSend: (text: string, selection: SelectionScope | null) =>
-          this.handleUserMessage(text, selection),
+        onSend: (text: string, selection: SelectionScope | null) => {
+          void this.handleUserMessage(text, selection);
+        },
         onClear: () => this.handleClear(),
         onStop: () => this.handleStop(),
       },
@@ -83,7 +84,7 @@ export class ObsidianChatView extends ItemView {
   async onClose(): Promise<void> {
     this.plugin.agent.abort();
     if (this.chatContainer) {
-      unmount(this.chatContainer);
+      await unmount(this.chatContainer);
       this.chatContainer = undefined;
     }
   }
@@ -183,7 +184,7 @@ export class ObsidianChatView extends ItemView {
       chat.setInputEnabled(true);
       chat.focus();
       // Persist after each turn
-      this.plugin.saveChatHistory();
+      void this.plugin.saveChatHistory();
     }
   }
 
@@ -196,7 +197,7 @@ export class ObsidianChatView extends ItemView {
       chat.setInputEnabled(true);
       chat.focus();
     }
-    this.plugin.saveChatHistory();
+    void this.plugin.saveChatHistory();
   }
 
   private handleClear(): void {
@@ -207,6 +208,6 @@ export class ObsidianChatView extends ItemView {
     this.running = false;
     this.chatContainer?.setInputEnabled(true);
     // Clear persisted state
-    this.plugin.saveChatHistory();
+    void this.plugin.saveChatHistory();
   }
 }

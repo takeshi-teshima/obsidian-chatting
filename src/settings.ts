@@ -57,7 +57,7 @@ export class ChatSettingTab extends PluginSettingTab {
   display(): void {
     const { containerEl } = this;
     containerEl.empty();
-    containerEl.createEl("h2", { text: "Chatting with AI" });
+    new Setting(containerEl).setName("Chatting with AI").setHeading();
 
     const s = this.plugin.settings;
 
@@ -82,7 +82,7 @@ export class ChatSettingTab extends PluginSettingTab {
               s.model = CHATGPT_OAUTH_DEFAULT_MODEL;
             }
             await this.plugin.saveSettings();
-            setTimeout(() => this.display(), 10);
+            window.setTimeout(() => this.display(), 10);
           })
       );
 
@@ -145,7 +145,7 @@ export class ChatSettingTab extends PluginSettingTab {
             s.apiKey = value.trim();
             await this.plugin.saveSettings();
             if (!hadKey && s.apiKey) {
-              setTimeout(() => this.display(), 10);
+              window.setTimeout(() => this.display(), 10);
             }
           });
       });
@@ -187,17 +187,16 @@ export class ChatSettingTab extends PluginSettingTab {
   private renderChatGPTOAuthSection(containerEl: HTMLElement): void {
     const credential = this.plugin.chatgptOAuth.getCredential();
 
-    const explainer = containerEl.createEl("div", { cls: "setting-item-description" });
-    explainer.style.padding = "0.75em";
-    explainer.style.marginBottom = "0.75em";
-    explainer.style.border = "1px solid var(--background-modifier-border)";
-    explainer.style.borderRadius = "6px";
-    explainer.style.background = "var(--background-secondary)";
-    explainer.innerHTML =
-      "Sign in with your ChatGPT account instead of using an OpenAI API key. " +
-      "Requests are routed through the ChatGPT/Codex backend (not <code>api.openai.com</code>) " +
-      "and require an active ChatGPT plan with Codex access. " +
-      "The available models mirror the Codex CLI catalog.";
+    const explainer = containerEl.createEl("div", {
+      cls: "setting-item-description ochatting-oauth-explainer",
+    });
+    explainer.createSpan({
+      text: "Sign in with your ChatGPT account instead of using an OpenAI API key. Requests are routed through the ChatGPT/Codex backend (not ",
+    });
+    explainer.createEl("code", { text: "api.openai.com" });
+    explainer.createSpan({
+      text: ") and require an active ChatGPT plan with Codex access. The available models mirror the Codex CLI catalog.",
+    });
 
     if (credential) {
       const account = credential.accountId
@@ -294,7 +293,7 @@ export class ChatSettingTab extends PluginSettingTab {
           if (value === "__custom__") {
             s.model = "";
             await this.plugin.saveSettings();
-            setTimeout(() => this.display(), 10);
+            window.setTimeout(() => this.display(), 10);
           } else {
             s.model = value;
             await this.plugin.saveSettings();
@@ -378,13 +377,12 @@ class ChatGPTDeviceLoginModal extends Modal {
   onOpen(): void {
     const { contentEl } = this;
     contentEl.empty();
-    contentEl.createEl("h2", { text: "Connect ChatGPT" });
+    new Setting(contentEl).setName("Connect ChatGPT").setHeading();
 
     contentEl.createEl("p", {
       text: "1. Open this page in any browser:",
     });
-    const linkRow = contentEl.createEl("div");
-    linkRow.style.margin = "0.4em 0 0.8em";
+    const linkRow = contentEl.createEl("div", { cls: "ochatting-device-link-row" });
     const link = linkRow.createEl("a", {
       text: this.authorization.verificationUri,
       href: this.authorization.verificationUri,
@@ -393,18 +391,12 @@ class ChatGPTDeviceLoginModal extends Modal {
     link.setAttr("rel", "noopener");
 
     contentEl.createEl("p", { text: "2. Enter this code on the page:" });
-    const codeRow = contentEl.createEl("div");
-    codeRow.style.display = "flex";
-    codeRow.style.alignItems = "center";
-    codeRow.style.gap = "0.5em";
-    codeRow.style.margin = "0.4em 0 1em";
+    const codeRow = contentEl.createEl("div", { cls: "ochatting-device-code-row" });
 
-    const codeBox = codeRow.createEl("code", { text: this.authorization.userCode });
-    codeBox.style.fontSize = "1.4em";
-    codeBox.style.padding = "0.3em 0.6em";
-    codeBox.style.borderRadius = "6px";
-    codeBox.style.background = "var(--background-secondary)";
-    codeBox.style.userSelect = "all";
+    codeRow.createEl("code", {
+      text: this.authorization.userCode,
+      cls: "ochatting-device-code",
+    });
 
     const copyBtn = codeRow.createEl("button", { text: "Copy code" });
     copyBtn.addEventListener("click", () => {
@@ -416,14 +408,10 @@ class ChatGPTDeviceLoginModal extends Modal {
 
     const status = contentEl.createEl("p", {
       text: "Waiting for authorization. You can return here after signing in.",
+      cls: "ochatting-device-status",
     });
-    status.style.fontStyle = "italic";
-    status.style.color = "var(--text-muted)";
 
-    const buttons = contentEl.createEl("div");
-    buttons.style.display = "flex";
-    buttons.style.justifyContent = "flex-end";
-    buttons.style.gap = "0.5em";
+    const buttons = contentEl.createEl("div", { cls: "ochatting-device-buttons" });
 
     const openBtn = buttons.createEl("button", { text: "Open login page" });
     openBtn.classList.add("mod-cta");
@@ -450,7 +438,8 @@ class ChatGPTDeviceLoginModal extends Modal {
         if (this.cancelled) return;
         const msg = e instanceof Error ? e.message : String(e);
         status.setText(`Login failed: ${msg}`);
-        status.style.color = "var(--text-error)";
+        status.removeClass("ochatting-device-status");
+        status.addClass("ochatting-device-status-error");
       });
   }
 

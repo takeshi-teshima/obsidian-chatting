@@ -3,7 +3,7 @@
 [![最新リリース](https://img.shields.io/github/v/release/o1xhack/obsidian-chatting?include_prereleases&label=release&color=7c3aed)](https://github.com/o1xhack/obsidian-chatting/releases)
 [![ダウンロード総数](https://img.shields.io/github/downloads/o1xhack/obsidian-chatting/total?color=7c3aed)](https://github.com/o1xhack/obsidian-chatting/releases)
 [![ライセンス](https://img.shields.io/github/license/o1xhack/obsidian-chatting?color=7c3aed)](../../LICENSE)
-[![Obsidian](https://img.shields.io/badge/obsidian-1.7.0%2B-7c3aed)](https://obsidian.md)
+[![Obsidian](https://img.shields.io/badge/obsidian-1.11.4%2B-7c3aed)](https://obsidian.md)
 
 **Obsidian の Vault に常駐する agentic な AI アシスタント —— スマホ・タブレット・デスクトップで同じ体験。**
 

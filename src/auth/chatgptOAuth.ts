@@ -78,7 +78,7 @@ interface DeviceTokenSuccess {
   code_verifier: string;
 }
 
-const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+const sleep = (ms: number) => new Promise((resolve) => window.setTimeout(resolve, ms));
 
 const base64UrlDecode = (input: string): string => {
   const padded = input.replace(/-/g, "+").replace(/_/g, "/");

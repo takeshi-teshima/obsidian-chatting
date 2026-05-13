@@ -3,7 +3,7 @@
 [![Latest release](https://img.shields.io/github/v/release/o1xhack/obsidian-chatting?include_prereleases&label=release&color=7c3aed)](https://github.com/o1xhack/obsidian-chatting/releases)
 [![Total downloads](https://img.shields.io/github/downloads/o1xhack/obsidian-chatting/total?color=7c3aed)](https://github.com/o1xhack/obsidian-chatting/releases)
 [![License](https://img.shields.io/github/license/o1xhack/obsidian-chatting?color=7c3aed)](LICENSE)
-[![Obsidian](https://img.shields.io/badge/obsidian-1.7.0%2B-7c3aed)](https://obsidian.md)
+[![Obsidian](https://img.shields.io/badge/obsidian-1.11.4%2B-7c3aed)](https://obsidian.md)
 
 **An agentic AI assistant that lives in your Obsidian vault — same experience on phone, tablet, and desktop.**
 

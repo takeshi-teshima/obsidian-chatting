@@ -1,6 +1,5 @@
 import {
   Plugin,
-  Platform,
   Notice,
   type MarkdownFileInfo,
   type Editor,
@@ -19,10 +18,6 @@ import { setChatGPTOAuthService } from "./api/chatgpt-oauth";
 
 const PLUGIN_ID = "chatting-with-ai";
 const LEGACY_PLUGIN_ID = "obsidian-chatting";
-const PLUGIN_DATA_DIR = `.obsidian/plugins/${PLUGIN_ID}`;
-const LEGACY_PLUGIN_DATA_DIR = `.obsidian/plugins/${LEGACY_PLUGIN_ID}`;
-const CHAT_STATE_PATH = `.obsidian/plugins/${PLUGIN_ID}/chat-state.json`;
-const LEGACY_CHAT_STATE_PATH = `.obsidian/plugins/${LEGACY_PLUGIN_ID}/chat-state.json`;
 const LEGACY_RELEASE_ASSETS = new Set(["main.js", "manifest.json", "styles.css"]);
 const SECRET_PROVIDERS = ["anthropic", "openai", "chatgpt-oauth"];
 const CHATGPT_OAUTH_SECRET_KEY = `${PLUGIN_ID}-chatgpt-oauth`;
@@ -59,21 +54,21 @@ export default class ChatPlugin extends Plugin {
 
     // Ribbon icon (users can hide; commands are the primary access)
     this.addRibbonIcon("message-circle", "Open Chatting with AI", (evt) => {
-      if (evt.type === "contextmenu" || (evt instanceof MouseEvent && evt.button === 2)) {
+      if (evt.type === "contextmenu" || evt.button === 2) {
         // Right-click: show menu with options
         const menu = new Menu();
         menu.addItem((item) =>
-          item.setTitle("Open chat").setIcon("message-circle").onClick(() => this.openChat())
+          item.setTitle("Open chat").setIcon("message-circle").onClick(() => void this.openChat())
         );
         menu.addItem((item) =>
-          item.setTitle("Chat about active note").setIcon("file-text").onClick(() => this.chatAboutActiveNote())
+          item.setTitle("Chat about active note").setIcon("file-text").onClick(() => void this.chatAboutActiveNote())
         );
         menu.addItem((item) =>
           item.setTitle("Copy transcript").setIcon("clipboard").onClick(() => this.shareTranscript())
         );
-        menu.showAtMouseEvent(evt as MouseEvent);
+        menu.showAtMouseEvent(evt);
       } else {
-        this.openChat();
+        void this.openChat();
       }
     });
 
@@ -82,7 +77,7 @@ export default class ChatPlugin extends Plugin {
     this.addCommand({
       id: "open-chat",
       name: "Open chat",
-      callback: () => this.openChat(),
+      callback: () => void this.openChat(),
     });
 
     this.addCommand({
@@ -102,7 +97,7 @@ export default class ChatPlugin extends Plugin {
       id: "chat-about-note",
       name: "Chat about this note",
       editorCallback: (editor: Editor, ctx: MarkdownFileInfo) => {
-        this.openChatWithMessage(`Summarize this note: ${ctx.file?.path ?? "the active document"}`);
+        void this.openChatWithMessage(`Summarize this note: ${ctx.file?.path ?? "the active document"}`);
       },
     });
 
@@ -115,7 +110,7 @@ export default class ChatPlugin extends Plugin {
         if (!sel || sel.length === 0) return false;
         if (checking) return true;
         const scope: SelectionScope = { text: sel, filePath: ctx.file?.path ?? "" };
-        this.openChatWithSelection(scope);
+        void this.openChatWithSelection(scope);
         return true;
       },
     });
@@ -130,7 +125,7 @@ export default class ChatPlugin extends Plugin {
           item
             .setTitle("Chat about this note")
             .setIcon("message-circle")
-            .onClick(() => this.openChatWithMessage(`Tell me about ${file.path}`))
+            .onClick(() => void this.openChatWithMessage(`Tell me about ${file.path}`))
         );
       })
     );
@@ -146,7 +141,7 @@ export default class ChatPlugin extends Plugin {
               .setIcon("message-circle")
               .onClick(() => {
                 const scope: SelectionScope = { text: sel, filePath: info.file?.path ?? "" };
-                this.openChatWithSelection(scope);
+                void this.openChatWithSelection(scope);
               })
           );
         }
@@ -154,9 +149,8 @@ export default class ChatPlugin extends Plugin {
     );
   }
 
-  async onunload(): Promise<void> {
-    await this.saveChatHistory();
-    this.app.workspace.detachLeavesOfType(VIEW_TYPE_CHAT);
+  onunload(): void {
+    void this.saveChatHistory();
   }
 
   // ─── Chat operations ────────────────────────────────────────────────
@@ -197,7 +191,7 @@ export default class ChatPlugin extends Plugin {
     await this.activateView();
     const view = this.getChatView();
     if (view) {
-      setTimeout(() => view.sendMessage(message), 100);
+      window.setTimeout(() => view.sendMessage(message), 100);
     }
   }
 
@@ -210,20 +204,20 @@ export default class ChatPlugin extends Plugin {
     await this.activateView();
     const view = this.getChatView();
     if (view) {
-      setTimeout(() => {
+      window.setTimeout(() => {
         view.setSelection(selection);
         view.focus();
       }, 100);
     }
   }
 
-  private chatAboutActiveNote(): void {
+  private async chatAboutActiveNote(): Promise<void> {
     const file = this.app.workspace.getActiveFile();
     if (!file) {
       new Notice("No active note.");
       return;
     }
-    this.openChatWithMessage(`Tell me about ${file.path}`);
+    await this.openChatWithMessage(`Tell me about ${file.path}`);
   }
 
   /** Open or reveal the chat view in the right sidebar (both desktop and mobile). */
@@ -232,7 +226,7 @@ export default class ChatPlugin extends Plugin {
     const existing = workspace.getLeavesOfType(VIEW_TYPE_CHAT);
 
     if (existing.length > 0) {
-      workspace.revealLeaf(existing[0]);
+      await workspace.revealLeaf(existing[0]);
       return;
     }
 
@@ -241,7 +235,7 @@ export default class ChatPlugin extends Plugin {
     const leaf = workspace.getRightLeaf(false);
     if (leaf) {
       await leaf.setViewState({ type: VIEW_TYPE_CHAT, active: true });
-      workspace.revealLeaf(leaf);
+      await workspace.revealLeaf(leaf);
     }
   }
 
@@ -295,7 +289,7 @@ export default class ChatPlugin extends Plugin {
         agentMessages: this.agent.exportMessages().slice(-80), // Cap at 80 API messages
       };
       await this.app.vault.adapter.write(
-        CHAT_STATE_PATH,
+        this.chatStatePath,
         JSON.stringify(state)
       );
     } catch {
@@ -305,8 +299,9 @@ export default class ChatPlugin extends Plugin {
 
   private async loadChatHistory(): Promise<void> {
     try {
-      const raw = await this.readFirstExisting([CHAT_STATE_PATH, LEGACY_CHAT_STATE_PATH]);
-      const state = JSON.parse(raw);
+      const raw = await this.readFirstExisting([this.chatStatePath, this.legacyChatStatePath]);
+      const state: unknown = JSON.parse(raw);
+      if (!isPersistedChatState(state)) return;
       if (Array.isArray(state.chatHistory)) {
         this.chatHistory = state.chatHistory;
       }
@@ -398,20 +393,18 @@ export default class ChatPlugin extends Plugin {
   }
 
   private async migrateLegacyPluginData(): Promise<void> {
-    await Promise.all([
-      this.migrateLegacyDataFiles(),
-      this.migrateLegacySecrets(),
-    ]);
+    await this.migrateLegacyDataFiles();
+    this.migrateLegacySecrets();
   }
 
   private async migrateLegacyDataFiles(): Promise<void> {
     const adapter = this.app.vault.adapter;
     try {
-      if (!(await adapter.exists(LEGACY_PLUGIN_DATA_DIR))) return;
-      await this.ensureFolder(PLUGIN_DATA_DIR);
-      await this.copyLegacyPluginDataDir(LEGACY_PLUGIN_DATA_DIR, PLUGIN_DATA_DIR, true);
+      if (!(await adapter.exists(this.legacyPluginDataDir))) return;
+      await this.ensureFolder(this.pluginDataDir);
+      await this.copyLegacyPluginDataDir(this.legacyPluginDataDir, this.pluginDataDir, true);
 
-      await adapter.rmdir(LEGACY_PLUGIN_DATA_DIR, true);
+      await adapter.rmdir(this.legacyPluginDataDir, true);
     } catch {
       // Migration is best-effort; legacy fallback reads still protect users.
     }
@@ -477,6 +470,29 @@ export default class ChatPlugin extends Plugin {
       // SecretStorage may be unavailable on very old Obsidian versions.
     }
   }
+
+  private get pluginDataDir(): string {
+    return `${this.app.vault.configDir}/plugins/${PLUGIN_ID}`;
+  }
+
+  private get legacyPluginDataDir(): string {
+    return `${this.app.vault.configDir}/plugins/${LEGACY_PLUGIN_ID}`;
+  }
+
+  private get chatStatePath(): string {
+    return `${this.pluginDataDir}/chat-state.json`;
+  }
+
+  private get legacyChatStatePath(): string {
+    return `${this.legacyPluginDataDir}/chat-state.json`;
+  }
+}
+
+function isPersistedChatState(value: unknown): value is {
+  chatHistory?: ChatPlugin["chatHistory"];
+  agentMessages?: Parameters<AgentLoop["importMessages"]>[0];
+} {
+  return typeof value === "object" && value !== null;
 }
 
 // ─── Settings migrations ─────────────────────────────────────────────────────

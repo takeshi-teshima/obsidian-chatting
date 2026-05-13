@@ -25,9 +25,9 @@ function debugLog(app: App, label: string, data: unknown): void {
   try {
     const timestamp = new Date().toISOString();
     const entry = `\n--- ${label} [${timestamp}] ---\n${JSON.stringify(data, null, 2)}\n`;
-    // Use the adapter to write outside the vault
-    app.vault.adapter.append(
-      ".obsidian/plugins/chatting-with-ai/debug.log",
+    // Use the adapter to write into the current vault config folder.
+    void app.vault.adapter.append(
+      `${app.vault.configDir}/plugins/chatting-with-ai/debug.log`,
       entry
     );
   } catch {

@@ -3,7 +3,7 @@
 [![最新版本](https://img.shields.io/github/v/release/o1xhack/obsidian-chatting?include_prereleases&label=release&color=7c3aed)](https://github.com/o1xhack/obsidian-chatting/releases)
 [![下載總數](https://img.shields.io/github/downloads/o1xhack/obsidian-chatting/total?color=7c3aed)](https://github.com/o1xhack/obsidian-chatting/releases)
 [![授權](https://img.shields.io/github/license/o1xhack/obsidian-chatting?color=7c3aed)](../../LICENSE)
-[![Obsidian](https://img.shields.io/badge/obsidian-1.7.0%2B-7c3aed)](https://obsidian.md)
+[![Obsidian](https://img.shields.io/badge/obsidian-1.11.4%2B-7c3aed)](https://obsidian.md)
 
 **一個 agentic 的 AI 助理,常駐你的 Obsidian 庫 —— 手機、平板、桌面體驗一致。**
 
