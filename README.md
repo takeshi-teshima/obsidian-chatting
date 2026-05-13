@@ -79,27 +79,37 @@ The agent uses find-and-replace scoped to the selection text. Everything outside
 
 ## 🚀 Quick start
 
-1. Install via [BRAT](https://github.com/TfTHacker/obsidian42-brat) → **Add Beta plugin** → `o1xhack/obsidian-chatting`
-2. Enable **Chatting with AI** in Community Plugins
-3. **Settings → Chatting with AI** → pick a provider, paste an API key (or click **Connect ChatGPT**)
-4. Open the chat from the ribbon icon or the command palette
+1. Open **Settings → Community plugins → Browse**.
+2. Search for **Chatting with AI**.
+3. Click **Install**, then **Enable**.
+4. **Settings → Chatting with AI** → pick a provider, paste an API key (or click **Connect ChatGPT**).
+5. Open the chat from the ribbon icon or the command palette.
 
 ## 📦 Install
 
+### Community Plugins (recommended)
+
+This is the default install path now that Chatting with AI is in the official Obsidian Community Plugins directory.
+
+1. In Obsidian, open **Settings → Community plugins**.
+2. If prompted, turn off Restricted Mode / turn on community plugins.
+3. Click **Browse** and search for **Chatting with AI**.
+4. Click **Install**, then **Enable**.
+
+### Migrating from BRAT
+
+If you previously installed the beta through BRAT, move to the community version once it appears in the plugin browser:
+
+1. In **Settings → Community plugins → Installed plugins**, disable **Chatting with AI**.
+2. Open **BRAT** settings and remove `o1xhack/obsidian-chatting` from the beta plugin list.
+3. Return to **Settings → Community plugins → Browse** and search for **Chatting with AI**.
+4. If Obsidian shows it as **Installed**, open its entry and click **Enable**. If it shows **Install**, click **Install**, then **Enable**.
+5. Open **Settings → Chatting with AI** and confirm your provider settings are still present.
+
+The plugin migrates data from the old `obsidian-chatting` folder to `chatting-with-ai` on first load. If you used a very old beta and the community browser does not recognize it as installed, installing the community version is still safe; the migration runs when the new plugin starts.
+
 <details>
-<summary><b>BRAT (recommended)</b></summary>
-
-BRAT installs beta plugins directly from GitHub and keeps them up to date.
-
-1. Install [BRAT](https://github.com/TfTHacker/obsidian42-brat) from Community Plugins
-2. **Command palette → BRAT: Add a beta plugin for testing**
-3. Enter `o1xhack/obsidian-chatting`
-4. Enable **Chatting with AI** in Community Plugins
-
-</details>
-
-<details>
-<summary><b>Manual</b></summary>
+<summary><b>Manual release install</b></summary>
 
 1. Download `main.js`, `manifest.json`, `styles.css` from the [latest release](https://github.com/o1xhack/obsidian-chatting/releases/latest)
 2. Place them in `<vault>/.obsidian/plugins/chatting-with-ai/`
@@ -142,7 +152,7 @@ ln -s "$(pwd)" /path/to/vault/.obsidian/plugins/chatting-with-ai
 - [x] 14 vault-native tools
 - [x] iOS / Android parity
 - [x] Selection scope
-- [ ] Submission to the official Obsidian Community Plugins listing
+- [x] Official Obsidian Community Plugins listing
 - [ ] Multi-conversation history with archive / search
 - [ ] Image attachments where the provider supports them
 - [ ] More upstream provider models picked up automatically as they ship

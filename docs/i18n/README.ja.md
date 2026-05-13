@@ -79,27 +79,37 @@
 
 ## 🚀 クイックスタート
 
-1. [BRAT](https://github.com/TfTHacker/obsidian42-brat) からインストール → **Add Beta plugin** → `o1xhack/obsidian-chatting`
-2. Community Plugins で **Chatting with AI** を有効化
-3. **設定 → Chatting with AI** → プロバイダを選び、API キーを貼り付け(または **Connect ChatGPT** をクリック)
-4. リボンアイコンまたはコマンドパレットからチャットを開く
+1. **設定 → Community plugins → Browse** を開く。
+2. **Chatting with AI** を検索する。
+3. **Install**、続いて **Enable** をクリックする。
+4. **設定 → Chatting with AI** → プロバイダを選び、API キーを貼り付け(または **Connect ChatGPT** をクリック)。
+5. リボンアイコンまたはコマンドパレットからチャットを開く。
 
 ## 📦 インストール
 
+### Community Plugins(推奨)
+
+Chatting with AI は公式 Obsidian Community Plugins ディレクトリに掲載されています。これが既定の推奨インストール方法です。
+
+1. Obsidian で **設定 → Community plugins** を開く。
+2. 必要なら Restricted Mode をオフにして Community plugins を有効化する。
+3. **Browse** をクリックし、**Chatting with AI** を検索する。
+4. **Install**、続いて **Enable** をクリックする。
+
+### BRAT から移行
+
+以前 BRAT でベータ版をインストールしていた場合、プラグインブラウザに表示され次第、コミュニティ版へ移行できます。
+
+1. **設定 → Community plugins → Installed plugins** で **Chatting with AI** を無効化する。
+2. **BRAT** 設定を開き、beta plugin list から `o1xhack/obsidian-chatting` を削除する。
+3. **設定 → Community plugins → Browse** に戻り、**Chatting with AI** を検索する。
+4. Obsidian が **Installed** と表示する場合は詳細を開いて **Enable** をクリックする。**Install** と表示される場合は **Install**、続いて **Enable** をクリックする。
+5. **設定 → Chatting with AI** を開き、プロバイダ設定が残っていることを確認する。
+
+初回起動時に、古い `obsidian-chatting` フォルダのデータは `chatting-with-ai` に移行されます。古い beta を使っていてコミュニティプラグインブラウザがインストール済みとして認識しない場合でも、コミュニティ版を直接インストールして問題ありません。新しいプラグインの起動時に移行が実行されます。
+
 <details>
-<summary><b>BRAT(推奨)</b></summary>
-
-BRAT は GitHub から直接ベータ版プラグインをインストールし、自動更新もしてくれます。
-
-1. Community Plugins から [BRAT](https://github.com/TfTHacker/obsidian42-brat) をインストール
-2. **コマンドパレット → BRAT: Add a beta plugin for testing**
-3. `o1xhack/obsidian-chatting` を入力
-4. Community Plugins で **Chatting with AI** を有効化
-
-</details>
-
-<details>
-<summary><b>手動インストール</b></summary>
+<summary><b>手動 release インストール</b></summary>
 
 1. [最新リリース](https://github.com/o1xhack/obsidian-chatting/releases/latest) から `main.js`、`manifest.json`、`styles.css` をダウンロード
 2. `<vault>/.obsidian/plugins/chatting-with-ai/` に配置
@@ -142,7 +152,7 @@ ln -s "$(pwd)" /path/to/vault/.obsidian/plugins/chatting-with-ai
 - [x] 14 個の vault ネイティブツール
 - [x] iOS / Android パリティ
 - [x] 選択範囲スコープ
-- [ ] Obsidian Community Plugins への提出
+- [x] Obsidian Community Plugins への掲載
 - [ ] 複数会話履歴 + アーカイブ/検索
 - [ ] プロバイダがサポートする画像添付
 - [ ] 上流で新しくリリースされたプロバイダモデルへの自動追従

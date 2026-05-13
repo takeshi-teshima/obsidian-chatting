@@ -79,27 +79,37 @@
 
 ## 🚀 快速上手
 
-1. 透過 [BRAT](https://github.com/TfTHacker/obsidian42-brat) 安裝 → **Add Beta plugin** → 輸入 `o1xhack/obsidian-chatting`
-2. 在社群外掛中啟用 **Chatting with AI**
-3. **設定 → Chatting with AI** → 選 provider,貼上 API key(或點 **Connect ChatGPT**)
-4. 從側欄圖示或命令面板開啟聊天
+1. 開啟 **設定 → 社群外掛 → 瀏覽**。
+2. 搜尋 **Chatting with AI**。
+3. 點擊 **安裝**,再點擊 **啟用**。
+4. **設定 → Chatting with AI** → 選 provider,貼上 API key(或點 **Connect ChatGPT**)。
+5. 從側欄圖示或命令面板開啟聊天。
 
 ## 📦 安裝
 
+### 社群外掛(推薦)
+
+Chatting with AI 已進入官方 Obsidian 社群外掛目錄,這是預設的首選安裝方式。
+
+1. 在 Obsidian 裡開啟 **設定 → 社群外掛**。
+2. 若有提示,先關閉 Restricted Mode / 開啟社群外掛。
+3. 點擊 **瀏覽**,搜尋 **Chatting with AI**。
+4. 點擊 **安裝**,再點擊 **啟用**。
+
+### 從 BRAT 遷移
+
+如果你之前透過 BRAT 安裝 beta 版本,等外掛市場中能搜尋到後可以遷移到社群版本:
+
+1. 在 **設定 → 社群外掛 → 已安裝外掛** 先停用 **Chatting with AI**。
+2. 開啟 **BRAT** 設定,從 beta 外掛列表移除 `o1xhack/obsidian-chatting`。
+3. 回到 **設定 → 社群外掛 → 瀏覽**,搜尋 **Chatting with AI**。
+4. 如果 Obsidian 顯示 **已安裝**,進入外掛詳情後點擊 **啟用**。如果顯示 **安裝**,點擊 **安裝**,再 **啟用**。
+5. 開啟 **設定 → Chatting with AI**,確認 provider 設定仍然存在。
+
+外掛首次啟動時會把舊的 `obsidian-chatting` 資料夾資料遷移到 `chatting-with-ai`。如果你使用的是很早的 beta,社群外掛瀏覽器沒有辨識為已安裝,直接安裝社群版本也可以;新外掛啟動時會執行遷移。
+
 <details>
-<summary><b>BRAT(推薦)</b></summary>
-
-BRAT 直接從 GitHub 安裝 beta 外掛,並自動跟進更新。
-
-1. 從社群外掛安裝 [BRAT](https://github.com/TfTHacker/obsidian42-brat)
-2. **命令面板 → BRAT: Add a beta plugin for testing**
-3. 輸入 `o1xhack/obsidian-chatting`
-4. 在社群外掛中啟用 **Chatting with AI**
-
-</details>
-
-<details>
-<summary><b>手動安裝</b></summary>
+<summary><b>手動 release 安裝</b></summary>
 
 1. 從 [最新發佈版本](https://github.com/o1xhack/obsidian-chatting/releases/latest) 下載 `main.js`、`manifest.json`、`styles.css`
 2. 放入 `<vault>/.obsidian/plugins/chatting-with-ai/`
@@ -142,7 +152,7 @@ ln -s "$(pwd)" /path/to/vault/.obsidian/plugins/chatting-with-ai
 - [x] 14 個 vault 原生工具
 - [x] iOS / Android 體驗一致
 - [x] 選取作用域
-- [ ] 送交至 Obsidian 社群外掛市場
+- [x] 上架 Obsidian 社群外掛市場
 - [ ] 多會話紀錄 + 歸檔/搜尋
 - [ ] Provider 支援的圖片附件
 - [ ] 上游新發佈的 provider 模型自動跟進

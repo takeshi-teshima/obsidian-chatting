@@ -79,27 +79,37 @@
 
 ## 🚀 快速上手
 
-1. 通过 [BRAT](https://github.com/TfTHacker/obsidian42-brat) 安装 → **Add Beta plugin** → 输入 `o1xhack/obsidian-chatting`
-2. 在社区插件里启用 **Chatting with AI**
-3. **设置 → Chatting with AI** → 选 provider,粘贴 API key(或者点 **Connect ChatGPT**)
-4. 从侧边栏图标或命令面板打开聊天
+1. 打开 **设置 → 社区插件 → 浏览**。
+2. 搜索 **Chatting with AI**。
+3. 点击 **安装**,然后点击 **启用**。
+4. **设置 → Chatting with AI** → 选 provider,粘贴 API key(或者点 **Connect ChatGPT**)。
+5. 从侧边栏图标或命令面板打开聊天。
 
 ## 📦 安装
 
+### 社区插件(推荐)
+
+Chatting with AI 已进入官方 Obsidian 社区插件目录,这是默认的首选安装方式。
+
+1. 在 Obsidian 里打开 **设置 → 社区插件**。
+2. 如果有提示,先关闭 Restricted Mode / 打开社区插件。
+3. 点击 **浏览**,搜索 **Chatting with AI**。
+4. 点击 **安装**,然后点击 **启用**。
+
+### 从 BRAT 迁移
+
+如果你之前通过 BRAT 安装了 beta 版本,等插件市场里能搜到后可以迁移到社区版本:
+
+1. 在 **设置 → 社区插件 → 已安装插件** 里先停用 **Chatting with AI**。
+2. 打开 **BRAT** 设置,从 beta 插件列表中移除 `o1xhack/obsidian-chatting`。
+3. 回到 **设置 → 社区插件 → 浏览**,搜索 **Chatting with AI**。
+4. 如果 Obsidian 显示 **已安装**,进入插件详情后点击 **启用**。如果显示 **安装**,点击 **安装**,然后 **启用**。
+5. 打开 **设置 → Chatting with AI**,确认 provider 设置仍然存在。
+
+插件首次启动时会把旧的 `obsidian-chatting` 文件夹数据迁移到 `chatting-with-ai`。如果你用的是很早的 beta,社区插件浏览器没有识别为已安装,直接安装社区版本也可以;新插件启动时会执行迁移。
+
 <details>
-<summary><b>BRAT(推荐)</b></summary>
-
-BRAT 直接从 GitHub 安装 beta 插件,并自动跟进更新。
-
-1. 从社区插件安装 [BRAT](https://github.com/TfTHacker/obsidian42-brat)
-2. **命令面板 → BRAT: Add a beta plugin for testing**
-3. 输入 `o1xhack/obsidian-chatting`
-4. 在社区插件里启用 **Chatting with AI**
-
-</details>
-
-<details>
-<summary><b>手动安装</b></summary>
+<summary><b>手动 release 安装</b></summary>
 
 1. 从 [最新发布版本](https://github.com/o1xhack/obsidian-chatting/releases/latest) 下载 `main.js`、`manifest.json`、`styles.css`
 2. 放入 `<vault>/.obsidian/plugins/chatting-with-ai/`
@@ -142,7 +152,7 @@ ln -s "$(pwd)" /path/to/vault/.obsidian/plugins/chatting-with-ai
 - [x] 14 个 vault 原生工具
 - [x] iOS / Android 体验一致
 - [x] 选区作用域
-- [ ] 提交到 Obsidian 社区插件市场
+- [x] 上架 Obsidian 社区插件市场
 - [ ] 多会话历史 + 归档/搜索
 - [ ] Provider 支持的图片附件
 - [ ] 自动跟进上游新发布的 provider 模型
