@@ -6,6 +6,6 @@
   "description": "Agentic AI chat assistant that reads, edits, and creates notes through natural conversation. Supports Anthropic, OpenAI, and ChatGPT account sign-in.",
   "author": "Yuxiao (o1xhack)",
   "authorUrl": "https://github.com/o1xhack",
-  "fundingUrl": "https://app.o1xhack.com",
+  "fundingUrl": "https://github.com/sponsors/o1xhack",
   "isDesktopOnly": false
 }
