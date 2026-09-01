@@ -13,6 +13,7 @@ import { TOOL_DEFINITIONS } from "../tools/registry";
 import { executeTool } from "../tools/executor";
 import { buildContext } from "./context";
 import { buildSystemPrompt, buildContextMessage } from "./system-prompt";
+import { SkillService, parseExplicitSkillInvocation } from "../skills/service";
 
 const MAX_CONVERSATION_LENGTH = 50;
 const KEEP_RECENT = 40;
@@ -47,10 +48,12 @@ export class AgentLoop {
   private app: App;
   private settings: ChatSettings;
   private aborted = false;
+  private skills: SkillService;
 
   constructor(app: App, settings: ChatSettings) {
     this.app = app;
     this.settings = settings;
+    this.skills = new SkillService(app);
   }
 
   /** Abort a running loop (e.g. user navigates away) */
@@ -77,8 +80,12 @@ export class AgentLoop {
   }
 
   /** Export the full conversation as a readable markdown transcript */
-  exportTranscript(): string {
-    const systemPrompt = buildSystemPrompt({ userInstructions: this.settings.customInstructions });
+  async exportTranscript(): Promise<string> {
+    const skillCatalog = await this.skills.catalogForPrompt();
+    const systemPrompt = buildSystemPrompt({
+      userInstructions: this.settings.customInstructions,
+      skillCatalog,
+    });
 
     const parts: string[] = [
       `# Chatting with AI Transcript`,
@@ -141,6 +148,30 @@ export class AgentLoop {
   ): Promise<void> {
     this.aborted = false;
 
+    // Explicit `/skill <id> ...` or `/<id> ...` invocation: inject the full
+    // Skill body for this turn only. Never persisted as "always active".
+    let effectiveUserMessage = userMessage;
+    const invocation = parseExplicitSkillInvocation(userMessage);
+    if (invocation) {
+      const doc = await this.skills.read(invocation.id);
+      if (!doc || doc.userInvocable === false) {
+        callbacks.onError(
+          doc
+            ? `Skill "${invocation.id}" is not user-invocable via slash command.`
+            : `Skill not found: ${invocation.id}`
+        );
+        return;
+      }
+      effectiveUserMessage = [
+        `[Explicit skill invocation: ${doc.id}]`,
+        `Follow this Skill for the current task:`,
+        doc.body,
+        "",
+        `User request:`,
+        invocation.rest || userMessage,
+      ].join("\n");
+    }
+
     // Build context once per user turn and prepend to the user message
     const context = buildContext(this.app);
     const contextPrefix = buildContextMessage(context);
@@ -156,10 +187,10 @@ export class AgentLoop {
         `Selected text:`,
         `> ${selection.text}`,
         "",
-        userMessage,
+        effectiveUserMessage,
       ].join("\n");
     } else {
-      fullMessage = `${contextPrefix}\n\n${userMessage}`;
+      fullMessage = `${contextPrefix}\n\n${effectiveUserMessage}`;
     }
 
     this.messages.push({ role: "user", content: fullMessage });
@@ -167,9 +198,16 @@ export class AgentLoop {
     // Prune if conversation is too long
     this.pruneHistory();
 
+    // Skill catalog is metadata-only (ids + descriptions); full Skill bodies
+    // are loaded on demand via read_skill or explicit slash invocation above.
+    const skillCatalog = await this.skills.catalogForPrompt();
+
     // System prompt is stable for this settings state (cache-friendly). Built
     // once per turn, identical across all iterations of this turn's loop.
-    const systemPrompt = buildSystemPrompt({ userInstructions: this.settings.customInstructions });
+    const systemPrompt = buildSystemPrompt({
+      userInstructions: this.settings.customInstructions,
+      skillCatalog,
+    });
 
     debugLog(this.app, "USER_MESSAGE", { userMessage, hasSelection: !!selection });
 

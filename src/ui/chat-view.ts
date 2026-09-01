@@ -127,7 +127,7 @@ export class ObsidianChatView extends ItemView {
   }
 
   /** Export the full transcript for debugging */
-  getTranscript(): string {
+  getTranscript(): Promise<string> {
     return this.plugin.agent.exportTranscript();
   }
 

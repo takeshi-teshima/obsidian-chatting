@@ -290,6 +290,50 @@ export const TOOL_DEFINITIONS: UnifiedToolDef[] = [
     },
   },
   {
+    name: "list_skills",
+    description:
+      "List available Skills (task-specific procedures) and when to use each one. Call this to discover what Skills exist; it returns only ids and short descriptions, not full procedures.",
+    inputSchema: {
+      type: "object",
+      properties: {},
+      required: [],
+    },
+  },
+  {
+    name: "read_skill",
+    description:
+      "Load the full procedure/body for one Skill by id. Only call this for a Skill you have determined is actually relevant to the current task, based on list_skills output — do not read every Skill preemptively.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        id: {
+          type: "string",
+          description: "The Skill id, as returned by list_skills.",
+        },
+      },
+      required: ["id"],
+    },
+  },
+  {
+    name: "read_skill_resource",
+    description:
+      "Load a supporting text resource file that belongs to a vault-defined Skill, after already reading that Skill with read_skill. Resource paths are relative to the Skill's own folder; path traversal outside that folder is rejected.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        id: {
+          type: "string",
+          description: "The Skill id that owns this resource.",
+        },
+        path: {
+          type: "string",
+          description: "Path to the resource file relative to the Skill's folder (e.g. 'reference/checklist.md').",
+        },
+      },
+      required: ["id", "path"],
+    },
+  },
+  {
     name: "ask_user",
     description:
       "Ask the user a clarifying question. Use this when you need more information before proceeding. The conversation will pause until the user responds.",
