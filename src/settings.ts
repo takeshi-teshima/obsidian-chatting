@@ -143,6 +143,24 @@ export class ChatSettingTab extends PluginSettingTab {
             }
           })
       );
+
+    // ─── Custom instructions ────────────────────────────────────────────
+    new Setting(containerEl)
+      .setName("Custom instructions")
+      .setDesc(
+        "Instructions applied to every chat. Keep project-specific workflows in Skills rather than putting everything here."
+      )
+      .addTextArea((textarea) => {
+        textarea
+          .setPlaceholder("e.g. Prefer terse, technical responses. Always use ISO dates.")
+          .setValue(s.customInstructions)
+          .onChange(async (value) => {
+            s.customInstructions = value;
+            await this.plugin.saveSettings();
+          });
+        textarea.inputEl.rows = 6;
+        textarea.inputEl.addClass("chatting-with-ai-custom-instructions");
+      });
   }
 
   // ─── API key + test (anthropic / openai) ──────────────────────────────────

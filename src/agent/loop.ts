@@ -78,7 +78,7 @@ export class AgentLoop {
 
   /** Export the full conversation as a readable markdown transcript */
   exportTranscript(): string {
-    const systemPrompt = buildSystemPrompt();
+    const systemPrompt = buildSystemPrompt({ userInstructions: this.settings.customInstructions });
 
     const parts: string[] = [
       `# Chatting with AI Transcript`,
@@ -167,8 +167,9 @@ export class AgentLoop {
     // Prune if conversation is too long
     this.pruneHistory();
 
-    // System prompt is static (cache-friendly). Built once, identical every call.
-    const systemPrompt = buildSystemPrompt();
+    // System prompt is stable for this settings state (cache-friendly). Built
+    // once per turn, identical across all iterations of this turn's loop.
+    const systemPrompt = buildSystemPrompt({ userInstructions: this.settings.customInstructions });
 
     debugLog(this.app, "USER_MESSAGE", { userMessage, hasSelection: !!selection });
 
