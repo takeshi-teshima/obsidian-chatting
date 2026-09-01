@@ -30,6 +30,7 @@ import {
   ChatGPTOAuthError,
   type ChatGPTOAuthService,
 } from "../auth/chatgptOAuth";
+import { resolveReasoningConfig } from "../model/reasoning";
 
 const CODEX_RESPONSES_URL = "https://chatgpt.com/backend-api/codex/responses";
 
@@ -131,8 +132,11 @@ export async function sendChatGPTOAuthMessage(
     parallel_tool_calls: true,
   };
 
-  if (/^o\d/.test(model) || /^gpt-5/.test(model) || /codex/i.test(model)) {
-    baseBody.reasoning = { effort: "medium", summary: "auto" };
+  const reasoning = resolveReasoningConfig("chatgpt-oauth", model, settings.reasoningEffort);
+  if (reasoning.enabled) {
+    baseBody.reasoning = reasoning.effort
+      ? { effort: reasoning.effort, summary: "auto" }
+      : { summary: "auto" };
     // Codex requires the encrypted reasoning payload to be threaded through
     // the request when reasoning is enabled. Without this, the backend
     // sometimes returns 400 on follow-up turns.

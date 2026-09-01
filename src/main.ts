@@ -522,11 +522,22 @@ function normalizeSettings(value: unknown): Partial<ChatSettings> {
   if (typeof value.model === "string") settings.model = value.model;
   if (typeof value.maxIterations === "number") settings.maxIterations = value.maxIterations;
   if (typeof value.enableWebSearch === "boolean") settings.enableWebSearch = value.enableWebSearch;
+  if (isReasoningEffort(value.reasoningEffort)) settings.reasoningEffort = value.reasoningEffort;
   return settings;
 }
 
 function isProvider(value: unknown): value is ChatSettings["provider"] {
   return value === "anthropic" || value === "openai" || value === "chatgpt-oauth";
+}
+
+function isReasoningEffort(value: unknown): value is ChatSettings["reasoningEffort"] {
+  return (
+    value === "auto" ||
+    value === "low" ||
+    value === "medium" ||
+    value === "high" ||
+    value === "max"
+  );
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
