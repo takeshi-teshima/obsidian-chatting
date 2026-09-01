@@ -1,7 +1,7 @@
 import { App, TFile, normalizePath } from "obsidian";
+import { getDocument } from "pdfjs-dist/build/pdf.min.mjs";
 import type {
   PdfJsDocument,
-  PdfJsLib,
   PdfJsOutlineNode,
   PdfMetadata,
   PdfOutlineItem,
@@ -17,14 +17,39 @@ function optionalString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
-function getPdfJsLib(): PdfJsLib {
-  const candidate = (window as Window & { pdfjsLib?: PdfJsLib }).pdfjsLib;
-  if (!candidate?.getDocument) {
+let bundledWorkerReady: Promise<void> | null = null;
+
+/**
+ * Load PDF.js' worker implementation into the same Obsidian plugin bundle.
+ *
+ * pdf.worker.min.mjs registers globalThis.pdfjsWorker.WorkerMessageHandler.
+ * PDF.js detects that handler and uses its main-thread/fake-worker path, so no
+ * separate worker file, URL, fetch, Node API, or Electron API is required at
+ * runtime. This is intentionally mobile-first: iOS and Android receive only
+ * the normal Obsidian plugin main.js artifact.
+ */
+async function ensureBundledPdfWorker(): Promise<void> {
+  if (!bundledWorkerReady) {
+    bundledWorkerReady = import("pdfjs-dist/build/pdf.worker.min.mjs")
+      .then(() => undefined)
+      .catch((error: unknown) => {
+        bundledWorkerReady = null;
+        const message = error instanceof Error ? error.message : String(error);
+        throw new Error(`Failed to initialize bundled PDF.js worker: ${message}`);
+      });
+  }
+
+  await bundledWorkerReady;
+
+  const globalWithWorker = globalThis as typeof globalThis & {
+    pdfjsWorker?: { WorkerMessageHandler?: unknown };
+  };
+  if (!globalWithWorker.pdfjsWorker?.WorkerMessageHandler) {
+    bundledWorkerReady = null;
     throw new Error(
-      "Obsidian's bundled PDF.js is unavailable. Reload Obsidian or update the PDF adapter."
+      "Bundled PDF.js worker initialized without WorkerMessageHandler. Rebuild the plugin and ensure pdf.worker.min.mjs is bundled into main.js."
     );
   }
-  return candidate;
 }
 
 export function resolvePdfFile(app: App, path: string): TFile {
@@ -38,9 +63,13 @@ export function resolvePdfFile(app: App, path: string): TFile {
 }
 
 export async function openPdfDocument(app: App, file: TFile): Promise<PdfJsDocument> {
-  const data = await app.vault.readBinary(file);
-  const loadingTask = getPdfJsLib().getDocument({ data });
-  return loadingTask.promise;
+  await ensureBundledPdfWorker();
+
+  // Give PDF.js an owned Uint8Array. Keeping this local avoids storing the PDF
+  // bytes in chat state and lets PDF.js release its document resources normally.
+  const data = new Uint8Array(await app.vault.readBinary(file));
+  const loadingTask = getDocument({ data });
+  return (await loadingTask.promise) as unknown as PdfJsDocument;
 }
 
 export async function destroyPdfDocument(document: PdfJsDocument): Promise<void> {
@@ -59,8 +88,9 @@ export async function extractPdfPageText(
   const fragments: string[] = [];
 
   try {
-    // streamTextContent + an explicit reader is friendlier to mobile Safari
-    // than building one large TextContent object in a single call.
+    // Use an explicit stream reader rather than getTextContent(). In Safari
+    // 26.x, PDF.js 6.1.x exposed a ReadableStream without the async-iterator
+    // behavior getTextContent() expected; getReader() remains compatible.
     const reader = page.streamTextContent().getReader();
     try {
       while (true) {
