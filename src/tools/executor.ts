@@ -49,6 +49,7 @@ export async function executeTool(
         return await openDocument(app, input);
       case "pdf_info":
       case "pdf_read":
+      case "pdf_search":
         return await executePdfTool(app, toolName, input);
       case "ask_user":
         return await askUser(input, onAskUser);

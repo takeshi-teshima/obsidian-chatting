@@ -7,6 +7,9 @@ const services = new WeakMap<App, PdfService>();
 const MAX_READ_PAGES = 30;
 const MAX_READ_CHARS = 30_000;
 const MAX_INFO_CHARS = 12_000;
+const MAX_SEARCH_CHARS = 12_000;
+const DEFAULT_SEARCH_RESULTS = 8;
+const MAX_SEARCH_RESULTS = 20;
 
 function serviceFor(app: App): PdfService {
   let service = services.get(app);
@@ -27,6 +30,8 @@ export async function executePdfTool(
       return pdfInfo(app, input);
     case "pdf_read":
       return pdfRead(app, input);
+    case "pdf_search":
+      return pdfSearch(app, input);
     default:
       return { result: `Unknown PDF tool: ${toolName}`, isError: true };
   }
@@ -82,6 +87,30 @@ async function pdfRead(app: App, input: Record<string, unknown>): Promise<ToolRe
   }
 
   return { result: text, isError: false };
+}
+
+async function pdfSearch(app: App, input: Record<string, unknown>): Promise<ToolResult> {
+  const path = requiredString(input.path);
+  const query = requiredString(input.query);
+  if (!path) return error("'path' is required.");
+  if (!query) return error("'query' is required.");
+
+  const requested = typeof input.max_results === "number" ? Math.floor(input.max_results) : DEFAULT_SEARCH_RESULTS;
+  const maxResults = Math.max(1, Math.min(MAX_SEARCH_RESULTS, requested));
+  const hits = await serviceFor(app).search(path, query, maxResults);
+
+  if (hits.length === 0) {
+    return {
+      result: `No local PDF text matches found for "${query}" in ${path}. Try a shorter or alternative phrase. Scanned/image-only PDFs may contain no extractable text.`,
+      isError: false,
+    };
+  }
+
+  const lines = [`Found ${hits.length} matching page(s) for "${query}" in ${path}:`];
+  for (const hit of hits) {
+    lines.push("", `p. ${hit.pageNumber} (${hit.matchCount} match${hit.matchCount === 1 ? "" : "es"} on page)`, hit.snippet);
+  }
+  return boundedResult(lines.join("\n"), MAX_SEARCH_CHARS, "PDF search result");
 }
 
 function parsePageSpec(spec: string): number[] {

@@ -7,9 +7,11 @@ import {
   readPdfOutline,
   resolvePdfFile,
 } from "./engine";
-import type { PdfInfo, PdfPageText } from "./types";
+import { normalizeSearchText } from "./normalize";
+import type { PdfInfo, PdfPageText, PdfSearchHit } from "./types";
 
 const MAX_CACHED_PDFS = 3;
+const YIELD_EVERY_PAGES = 8;
 
 interface PdfCacheEntry {
   key: string;
@@ -73,6 +75,46 @@ export class PdfService {
     return pageNumbers.map((page) => entry.pages.get(page)!).filter(Boolean);
   }
 
+  async search(path: string, query: string, maxResults: number): Promise<PdfSearchHit[]> {
+    const normalizedQuery = normalizeSearchText(query);
+    if (!normalizedQuery) return [];
+
+    const file = resolvePdfFile(this.app, path);
+    const entry = this.getEntry(file);
+    const hits: PdfSearchHit[] = [];
+    const document = await openPdfDocument(this.app, file);
+
+    try {
+      entry.pageCount = document.numPages;
+      for (let pageNumber = 1; pageNumber <= entry.pageCount; pageNumber++) {
+        let page = entry.pages.get(pageNumber);
+        if (!page) {
+          page = await extractPdfPageText(document, pageNumber);
+          entry.pages.set(pageNumber, page);
+        }
+
+        const firstIndex = page.searchText.indexOf(normalizedQuery);
+        if (firstIndex !== -1) {
+          hits.push({
+            pageNumber,
+            snippet: buildSnippet(page.searchText, firstIndex, normalizedQuery.length),
+            matchCount: countMatches(page.searchText, normalizedQuery),
+          });
+          if (hits.length >= maxResults) break;
+        }
+
+        if (pageNumber % YIELD_EVERY_PAGES === 0) {
+          await yieldToUi();
+        }
+      }
+    } finally {
+      await destroyPdfDocument(document);
+    }
+
+    this.touch(entry);
+    return hits;
+  }
+
   private getEntry(file: TFile): PdfCacheEntry {
     const key = `${file.path}\u0000${file.stat.mtime}\u0000${file.stat.size}`;
     const existing = this.cache.get(key);
@@ -119,4 +161,28 @@ export class PdfService {
       throw new Error(`Page ${pageNumber} is outside the valid range 1-${pageCount}.`);
     }
   }
+}
+
+function countMatches(text: string, query: string): number {
+  let count = 0;
+  let from = 0;
+  while (true) {
+    const index = text.indexOf(query, from);
+    if (index === -1) return count;
+    count += 1;
+    from = index + Math.max(1, query.length);
+  }
+}
+
+function buildSnippet(text: string, index: number, queryLength: number): string {
+  const radius = 260;
+  const start = Math.max(0, index - radius);
+  const end = Math.min(text.length, index + queryLength + radius);
+  const prefix = start > 0 ? "…" : "";
+  const suffix = end < text.length ? "…" : "";
+  return `${prefix}${text.slice(start, end).trim()}${suffix}`;
+}
+
+function yieldToUi(): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, 0));
 }

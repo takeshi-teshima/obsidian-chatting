@@ -267,6 +267,29 @@ export const TOOL_DEFINITIONS: UnifiedToolDef[] = [
     },
   },
   {
+    name: "pdf_search",
+    description:
+      "Search a PDF locally without sending it to the model. Returns matching page numbers and compact snippets. Use this before pdf_read when the relevant pages are unknown.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        path: {
+          type: "string",
+          description: "Path to a PDF relative to the vault root.",
+        },
+        query: {
+          type: "string",
+          description: "Text or phrase to search for after Unicode/whitespace normalization.",
+        },
+        max_results: {
+          type: "number",
+          description: "Maximum matching pages to return. Default 8, maximum 20.",
+        },
+      },
+      required: ["path", "query"],
+    },
+  },
+  {
     name: "ask_user",
     description:
       "Ask the user a clarifying question. Use this when you need more information before proceeding. The conversation will pause until the user responds.",
