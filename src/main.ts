@@ -310,7 +310,13 @@ export default class ChatPlugin extends Plugin {
     }
   }
 
-  private async loadChatHistory(): Promise<void> {
+  /**
+   * Reload persisted chat state from disk. Public so the chat view's
+   * "Reload" action can re-sync in-memory state after chat-state.json
+   * has been edited externally (e.g. to trim an oversized tool result
+   * that was blowing out the model's context window).
+   */
+  async loadChatHistory(): Promise<void> {
     try {
       const raw = await this.readFirstExisting([this.chatStatePath, this.legacyChatStatePath]);
       const state: unknown = JSON.parse(raw);
