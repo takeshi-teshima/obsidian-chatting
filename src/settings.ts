@@ -3,6 +3,7 @@ import type ChatPlugin from "./main";
 import type { Provider, ChatSettings } from "./types";
 import { CHATGPT_OAUTH_DEFAULT_MODEL } from "./types";
 import type { ChatGPTDeviceAuthorization, PollHandle } from "./auth/chatgptOAuth";
+import { PromptProfileService } from "./profiles/service";
 
 interface ModelOption {
   value: string;
@@ -160,6 +161,45 @@ export class ChatSettingTab extends PluginSettingTab {
           });
         textarea.inputEl.rows = 6;
         textarea.inputEl.addClass("chatting-with-ai-custom-instructions");
+      });
+
+    // ─── Prompt profile ─────────────────────────────────────────────────
+    this.renderPromptProfileSection(containerEl);
+  }
+
+  // ─── Prompt profiles (AI/Prompts/**/*.md) ──────────────────────────────
+
+  private renderPromptProfileSection(containerEl: HTMLElement): void {
+    const s = this.plugin.settings;
+    const profileService = new PromptProfileService(this.app);
+    const profiles = profileService.list();
+
+    // Defensive fallback: if the currently-selected profile id no longer
+    // resolves to a file, degrade to "None" in the UI. This never blocks
+    // chat — PromptProfileService.resolve() already degrades gracefully
+    // at request time regardless of what's shown here.
+    const activeExists = !s.activeProfileId || profiles.some((p) => p.id === s.activeProfileId);
+
+    new Setting(containerEl)
+      .setName("Prompt profile")
+      .setDesc(
+        profiles.length > 0
+          ? "Markdown-backed profiles discovered under AI/Prompts. Edit the files directly in Obsidian to change instructions, model, effort, web search, or skills."
+          : "No profiles found under AI/Prompts. Create a Markdown file there (with optional frontmatter: name, description, model, effort, webSearch, skills) to add one."
+      )
+      .addDropdown((dropdown) => {
+        dropdown.addOption("__none__", "None / Global defaults");
+        for (const p of profiles) {
+          dropdown.addOption(p.id, p.name);
+        }
+        if (s.activeProfileId && !activeExists) {
+          dropdown.addOption(s.activeProfileId, `${s.activeProfileId} (missing)`);
+        }
+        dropdown.setValue(s.activeProfileId ?? "__none__");
+        dropdown.onChange(async (value) => {
+          s.activeProfileId = value === "__none__" ? null : value;
+          await this.plugin.saveSettings();
+        });
       });
   }
 

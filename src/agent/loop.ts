@@ -14,6 +14,7 @@ import { executeTool } from "../tools/executor";
 import { buildContext } from "./context";
 import { buildSystemPrompt, buildContextMessage } from "./system-prompt";
 import { SkillService, parseExplicitSkillInvocation } from "../skills/service";
+import { PromptProfileService } from "../profiles/service";
 
 const MAX_CONVERSATION_LENGTH = 50;
 const KEEP_RECENT = 40;
@@ -49,11 +50,13 @@ export class AgentLoop {
   private settings: ChatSettings;
   private aborted = false;
   private skills: SkillService;
+  private profiles: PromptProfileService;
 
   constructor(app: App, settings: ChatSettings) {
     this.app = app;
     this.settings = settings;
     this.skills = new SkillService(app);
+    this.profiles = new PromptProfileService(app);
   }
 
   /** Abort a running loop (e.g. user navigates away) */
@@ -202,10 +205,27 @@ export class AgentLoop {
     // are loaded on demand via read_skill or explicit slash invocation above.
     const skillCatalog = await this.skills.catalogForPrompt();
 
+    // Resolve the active Prompt Profile (if any) against current global
+    // settings. This never mutates `this.settings` — it produces a per-turn
+    // effective-settings object so disabling/switching a profile restores
+    // global defaults immediately on the next turn.
+    const { effective } = await this.profiles.resolve(this.settings.activeProfileId, {
+      model: this.settings.model,
+      effort: this.settings.reasoningEffort,
+      enableWebSearch: this.settings.enableWebSearch,
+    });
+    const requestSettings: ChatSettings = {
+      ...this.settings,
+      model: effective.model,
+      reasoningEffort: effective.effort,
+      enableWebSearch: effective.enableWebSearch,
+    };
+
     // System prompt is stable for this settings state (cache-friendly). Built
     // once per turn, identical across all iterations of this turn's loop.
     const systemPrompt = buildSystemPrompt({
       userInstructions: this.settings.customInstructions,
+      profileInstructions: effective.profileInstructions,
       skillCatalog,
     });
 
@@ -221,14 +241,14 @@ export class AgentLoop {
       let response;
       try {
         response = await sendMessage(
-          this.settings,
+          requestSettings,
           this.messages,
           TOOL_DEFINITIONS,
           systemPrompt
         );
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
-        debugLog(this.app, "API_ERROR", { error: msg, model: this.settings.model, provider: this.settings.provider });
+        debugLog(this.app, "API_ERROR", { error: msg, model: requestSettings.model, provider: requestSettings.provider });
         callbacks.onError(msg);
         return;
       }
