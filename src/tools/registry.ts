@@ -233,6 +233,40 @@ export const TOOL_DEFINITIONS: UnifiedToolDef[] = [
     },
   },
   {
+    name: "pdf_info",
+    description:
+      "Inspect a PDF locally without sending the PDF to the model. Returns page count, metadata, and bookmarks/outline when available.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        path: {
+          type: "string",
+          description: "Path to a PDF relative to the vault root.",
+        },
+      },
+      required: ["path"],
+    },
+  },
+  {
+    name: "pdf_read",
+    description:
+      "Read only specified PDF pages as locally extracted text. Prefer small page ranges to minimize context usage.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        path: {
+          type: "string",
+          description: "Path to a PDF relative to the vault root.",
+        },
+        pages: {
+          type: "string",
+          description: "1-based pages, e.g. '3', '3-5', or '1,4,7-10'. Maximum 30 pages per call.",
+        },
+      },
+      required: ["path", "pages"],
+    },
+  },
+  {
     name: "ask_user",
     description:
       "Ask the user a clarifying question. Use this when you need more information before proceeding. The conversation will pause until the user responds.",
