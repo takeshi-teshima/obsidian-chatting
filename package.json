@@ -22,6 +22,9 @@
     "codex:login": "node test/codex-login.mjs",
     "codex:smoke": "node test/codex-smoke.mjs"
   },
+  "dependencies": {
+    "pdfjs-dist": "6.2.108"
+  },
   "devDependencies": {
     "@types/node": "^22.0.0",
     "esbuild": "^0.24.0",

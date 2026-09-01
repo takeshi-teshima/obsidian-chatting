@@ -2,8 +2,13 @@ import esbuild from "esbuild";
 import esbuildSvelte from "esbuild-svelte";
 import { sveltePreprocess } from "svelte-preprocess";
 import process from "process";
+import { readFileSync } from "fs";
 
 const prod = process.argv[2] === "production";
+const thirdPartyLicenses = readFileSync(
+  new URL("./THIRD_PARTY_LICENSES.md", import.meta.url),
+  "utf8"
+).replace(/\*\//g, "* /");
 
 const context = await esbuild.context({
   entryPoints: ["src/main.ts"],
@@ -34,6 +39,9 @@ const context = await esbuild.context({
   logLevel: "info",
   sourcemap: prod ? false : "inline",
   treeShaking: true,
+  banner: {
+    js: `/*!\n${thirdPartyLicenses}\n*/`,
+  },
   outfile: "main.js",
 });
 
