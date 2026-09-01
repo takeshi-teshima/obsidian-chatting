@@ -2,6 +2,7 @@
   import type { App, Component as ObsidianComponent } from "obsidian";
   import { MarkdownRenderer } from "obsidian";
   import type { ToolResult, SelectionScope } from "../types";
+  import { parsePdfMention, buildPdfScopedContext, choosePdf } from "../context/pdf-mention";
 
   interface ChatMessage {
     id: number;
@@ -36,6 +37,12 @@
 
   // Selection scope (shown as a pill above input)
   let selection = $state<SelectionScope | null>(null);
+
+  // Live preview of an `@pdf ...` mention in the composer text. Recomputed
+  // from `inputText` on every change (cheap: metadata-only vault lookups,
+  // no file reads). Drives the removable PDF pill and is re-derived at
+  // send time so it's always in sync with what's about to be sent.
+  let pdfMention = $derived(parsePdfMention(app, inputText));
 
   // ask_user support
   let askUserResolve: ((value: string) => void) | null = $state(null);
@@ -145,32 +152,60 @@
 
   // ─── Internal handlers ────────────────────────────────────────────────
 
-  function handleSend(): void {
-    const text = inputText.trim();
-    if (!text) return;
+  async function handleSend(): Promise<void> {
+    const raw = inputText.trim();
+    if (!raw) return;
+
+    if (askUserResolve) {
+      inputText = "";
+      resetHeight();
+      addUserMessage(raw);
+      const resolve = askUserResolve;
+      askUserResolve = null;
+      resolve(raw);
+      return;
+    }
+
+    // Single owner of `@pdf ...` mention parsing: resolve (or error, or
+    // open a picker for a bare mention) before this turn is ever handed
+    // to the agent loop. Cancelling the picker must leave the composer
+    // usable and must not send an unintended turn.
+    const parsed = parsePdfMention(app, raw);
+    if (parsed.error) {
+      addError(parsed.error);
+      return;
+    }
+
+    let ref = parsed.ref;
+    if (parsed.needsPicker) {
+      const chosen = await choosePdf(app);
+      if (!chosen) return; // cancelled: leave composer usable, do not send
+      ref = chosen;
+    }
 
     inputText = "";
     resetHeight();
 
-    if (askUserResolve) {
-      addUserMessage(text);
-      const resolve = askUserResolve;
-      askUserResolve = null;
-      resolve(text);
-      return;
-    }
-
     // Pass current selection and consume it (one-shot per send)
     const currentSelection = selection;
     selection = null;
+
+    // Consume the PDF ref one-shot: the `@pdf` token is already stripped
+    // from `parsed.text`, and the resolved ref never persists past this send.
+    const text = ref ? `${buildPdfScopedContext(ref)}\n\n${parsed.text}` : parsed.text;
     onSend(text, currentSelection);
   }
 
   function handleKeydown(e: KeyboardEvent): void {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
-      handleSend();
+      void handleSend();
     }
+  }
+
+  /** Remove the `@pdf` mention token from the composer without sending. */
+  function dismissPdfMention(): void {
+    inputText = pdfMention.text;
   }
 
   function autoGrow(): void {
@@ -292,6 +327,28 @@
     </div>
   {/if}
 
+  <!-- PDF mention pill: shown as soon as an `@pdf` token is typed. Stores
+       only the resolved ContextRef's name/path for display — never bytes. -->
+  {#if pdfMention.ref || pdfMention.needsPicker}
+    <div class="ochatting-selection-pill">
+      <div class="ochatting-selection-content">
+        <span class="ochatting-selection-label">
+          {pdfMention.ref ? `PDF: ${pdfMention.ref.name}` : "PDF: choose on send"}
+        </span>
+        {#if pdfMention.ref}
+          <span class="ochatting-selection-preview">{pdfMention.ref.path}</span>
+        {/if}
+      </div>
+      <button
+        class="ochatting-selection-dismiss"
+        onclick={dismissPdfMention}
+        aria-label="Remove PDF mention"
+      >
+        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+      </button>
+    </div>
+  {/if}
+
   <!-- Input bar -->
   <div class="ochatting-input-bar">
     <textarea
@@ -307,7 +364,7 @@
     {#if inputEnabled}
       <button
         class="ochatting-send-btn"
-        onclick={handleSend}
+        onclick={() => void handleSend()}
         aria-label="Send message"
       >
         <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"></line><polyline points="5 12 12 5 19 12"></polyline></svg>
