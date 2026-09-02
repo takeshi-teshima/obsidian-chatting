@@ -31,6 +31,8 @@ import {
   type ChatGPTOAuthService,
 } from "../auth/chatgptOAuth";
 import { resolveReasoningConfig } from "../model/reasoning";
+import type { ProviderRequestContext } from "./vision";
+import { buildResponsesVisionContent } from "./vision";
 
 const CODEX_RESPONSES_URL = "https://chatgpt.com/backend-api/codex/responses";
 
@@ -92,6 +94,7 @@ export async function sendChatGPTOAuthMessage(
   messages: UnifiedMessage[],
   tools: UnifiedToolDef[],
   systemPrompt: string,
+  requestContext?: ProviderRequestContext,
 ): Promise<UnifiedResponse> {
   if (!oauthService) {
     throw new ChatGPTOAuthError(
@@ -120,7 +123,7 @@ export async function sendChatGPTOAuthMessage(
     model,
     // Replay the full conversation each turn — Codex's `store:false` mode
     // makes server-side `previous_response_id` chaining unavailable.
-    input: buildFullHistoryInput(messages),
+    input: await buildFullHistoryInput(messages, requestContext?.images),
     instructions: systemPrompt,
     // Required by the Codex backend; omitting it returns
     // 400 {"detail":"Store must be set to false"}.
@@ -380,16 +383,21 @@ function parseSSE(text: string): Array<Record<string, unknown>> {
  * The system prompt is sent separately via the `instructions` field, so we
  * never include it here.
  */
-function buildFullHistoryInput(
+async function buildFullHistoryInput(
   messages: UnifiedMessage[],
-): Array<Record<string, unknown>> {
+  resolver?: ProviderRequestContext["images"],
+): Promise<Array<Record<string, unknown>>> {
   const items: Array<Record<string, unknown>> = [];
 
   for (const msg of messages) {
     const role = msg.role === "assistant" ? "assistant" : "user";
 
     if (typeof msg.content === "string") {
-      items.push({ type: "message", role, content: msg.content });
+      // `store:false` means this backend requires the full history replayed
+      // on every turn, so historical image ContextRefs are intentionally
+      // re-resolved (re-read + re-encoded) here on every subsequent request.
+      const visionContent = await buildResponsesVisionContent(msg, resolver);
+      items.push({ type: "message", role, content: visionContent ?? msg.content });
       continue;
     }
 

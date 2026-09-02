@@ -15,6 +15,8 @@ import { buildContext } from "./context";
 import { buildSystemPrompt, buildContextMessage } from "./system-prompt";
 import { SkillService, parseExplicitSkillInvocation } from "../skills/service";
 import { PromptProfileService } from "../profiles/service";
+import type { ContextRef } from "../context/refs";
+import { VaultImageResolver } from "../context/image-resolver";
 
 const MAX_CONVERSATION_LENGTH = 50;
 const KEEP_RECENT = 40;
@@ -51,12 +53,14 @@ export class AgentLoop {
   private aborted = false;
   private skills: SkillService;
   private profiles: PromptProfileService;
+  private readonly imageResolver: VaultImageResolver;
 
   constructor(app: App, settings: ChatSettings) {
     this.app = app;
     this.settings = settings;
     this.skills = new SkillService(app);
     this.profiles = new PromptProfileService(app);
+    this.imageResolver = new VaultImageResolver(app);
   }
 
   /** Abort a running loop (e.g. user navigates away) */
@@ -147,7 +151,8 @@ export class AgentLoop {
   async run(
     userMessage: string,
     callbacks: AgentCallbacks,
-    selection?: SelectionScope | null
+    selection?: SelectionScope | null,
+    contextRefs: ContextRef[] = []
   ): Promise<void> {
     this.aborted = false;
 
@@ -196,7 +201,11 @@ export class AgentLoop {
       fullMessage = `${contextPrefix}\n\n${effectiveUserMessage}`;
     }
 
-    this.messages.push({ role: "user", content: fullMessage });
+    this.messages.push({
+      role: "user",
+      content: fullMessage,
+      contextRefs: contextRefs.length > 0 ? [...contextRefs] : undefined,
+    });
 
     // Prune if conversation is too long
     this.pruneHistory();
@@ -244,7 +253,8 @@ export class AgentLoop {
           requestSettings,
           this.messages,
           TOOL_DEFINITIONS,
-          systemPrompt
+          systemPrompt,
+          { images: this.imageResolver }
         );
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
