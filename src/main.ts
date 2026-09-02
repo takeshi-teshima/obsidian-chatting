@@ -15,6 +15,13 @@ import { AgentLoop } from "./agent/loop";
 import { ChatGPTOAuthStore } from "./auth/chatgptOAuthStore";
 import { ChatGPTOAuthService } from "./auth/chatgptOAuth";
 import { setChatGPTOAuthService } from "./api/chatgpt-oauth";
+import { SessionStore } from "./session/store";
+import type { ChatHistoryEntry, PersistedSession } from "./session/types";
+import {
+  SessionPickerModal,
+  confirmDeleteSession,
+  promptSessionTitle,
+} from "./session/session-picker";
 
 const PLUGIN_ID = "chatting-with-ai";
 const LEGACY_PLUGIN_ID = "obsidian-chatting";
@@ -29,8 +36,12 @@ export default class ChatPlugin extends Plugin {
   agent!: AgentLoop;
   /** ChatGPT OAuth service (used by the chatgpt-oauth provider). */
   chatgptOAuth!: ChatGPTOAuthService;
+  /** Multi-session persistence store (sessions/index.json + <id>.json). */
+  sessions!: SessionStore;
+  /** Id of the session currently loaded into `agent`/`chatHistory`. */
+  activeSessionId = "";
   /** Chat messages for replaying into the UI when the view reopens */
-  chatHistory: Array<{ type: string; text?: string; toolName?: string; toolInput?: Record<string, unknown>; toolResult?: { result: string; isError: boolean } }> = [];
+  chatHistory: ChatHistoryEntry[] = [];
 
   async onload(): Promise<void> {
     await this.migrateLegacyPluginData();
@@ -44,8 +55,14 @@ export default class ChatPlugin extends Plugin {
 
     this.agent = new AgentLoop(this.app, this.settings);
 
-    // Restore persisted chat history
-    await this.loadChatHistory();
+    // Restore persisted sessions (migrating the legacy single-chat state on
+    // first run, or reconciling/recovering the session store otherwise).
+    // This must complete before the chat view can render.
+    this.sessions = new SessionStore(this.app, PLUGIN_ID);
+    const bootstrap = await this.sessions.initialize({
+      legacyChatStatePaths: [this.chatStatePath, this.legacyChatStatePath],
+    });
+    this.applySessionToRuntime(bootstrap.session);
 
     this.addSettingTab(new ChatSettingTab(this.app, this));
 
@@ -90,6 +107,32 @@ export default class ChatPlugin extends Plugin {
       id: "clear-chat",
       name: "Clear conversation",
       callback: () => this.clearChat(),
+    });
+
+    // ─── Session commands ────────────────────────────────────────────────
+
+    this.addCommand({
+      id: "new-chat-session",
+      name: "New chat session",
+      callback: () => void this.newSession(),
+    });
+
+    this.addCommand({
+      id: "switch-chat-session",
+      name: "Switch chat session",
+      callback: () => void this.showSessionPicker(),
+    });
+
+    this.addCommand({
+      id: "rename-chat-session",
+      name: "Rename current chat session",
+      callback: () => void this.renameActiveSession(),
+    });
+
+    this.addCommand({
+      id: "delete-chat-session",
+      name: "Delete current chat session",
+      callback: () => void this.deleteActiveSession(),
     });
 
     // Editor command: chat about the current note (only when editor is active)
@@ -163,7 +206,9 @@ export default class ChatPlugin extends Plugin {
   }
 
   onunload(): void {
-    void this.saveChatHistory();
+    // Best-effort: Obsidian does not await onunload, so this is a fire-and-
+    // forget flush of the active session.
+    void this.saveActiveSession();
   }
 
   // ─── Chat operations ────────────────────────────────────────────────
@@ -293,43 +338,120 @@ export default class ChatPlugin extends Plugin {
     }
   }
 
-  // ─── Chat history persistence ─────────────────────────────────────────
+  // ─── Session persistence ───────────────────────────────────────────────
 
-  async saveChatHistory(): Promise<void> {
+  /**
+   * Capture the live runtime (UI history + agent messages + profile/effort
+   * selection) into the session record currently on disk for `id`, and
+   * write it back. Best-effort: persistence failures must never break the
+   * chat UI.
+   */
+  async saveActiveSession(): Promise<void> {
+    if (!this.sessions || !this.activeSessionId) return;
     try {
-      const state = {
+      const current = await this.sessions.load(this.activeSessionId);
+      if (!current) return;
+      await this.sessions.save({
+        ...current,
         chatHistory: this.chatHistory.slice(-100), // Cap at 100 UI messages
         agentMessages: this.agent.exportMessages().slice(-80), // Cap at 80 API messages
-      };
-      await this.app.vault.adapter.write(
-        this.chatStatePath,
-        JSON.stringify(state)
-      );
+        profileId: this.settings.activeProfileId ?? undefined,
+        effortOverride: this.settings.reasoningEffort,
+      });
     } catch {
       // Persistence is best-effort
     }
   }
 
   /**
-   * Reload persisted chat state from disk. Public so the chat view's
-   * "Reload" action can re-sync in-memory state after chat-state.json
-   * has been edited externally (e.g. to trim an oversized tool result
-   * that was blowing out the model's context window).
+   * Apply a loaded session onto the live runtime: reset the agent/provider
+   * continuation state, import the session's messages, replace the UI
+   * history, restore the session's profile/effort selection, and repaint
+   * the open chat view. This is the single authoritative "switch into a
+   * session" path used by startup, New/Switch/Delete session, and the
+   * "Reload" action.
+   *
+   * Order matters: abort -> clear (resets OpenAI/ChatGPT-OAuth continuation
+   * state) -> importMessages. Never call agent.clear() after importing.
    */
-  async loadChatHistory(): Promise<void> {
-    try {
-      const raw = await this.readFirstExisting([this.chatStatePath, this.legacyChatStatePath]);
-      const state: unknown = JSON.parse(raw);
-      if (!isPersistedChatState(state)) return;
-      if (Array.isArray(state.chatHistory)) {
-        this.chatHistory = state.chatHistory;
-      }
-      if (Array.isArray(state.agentMessages)) {
-        this.agent.importMessages(state.agentMessages);
-      }
-    } catch {
-      // No saved state or parse error — start fresh
+  private applySessionToRuntime(session: PersistedSession): void {
+    this.agent.abort();
+    this.agent.clear();
+    this.agent.importMessages(session.agentMessages);
+    this.chatHistory = [...session.chatHistory];
+    this.activeSessionId = session.id;
+    this.settings.activeProfileId = session.profileId ?? null;
+    if (session.effortOverride) {
+      this.settings.reasoningEffort = session.effortOverride;
     }
+    this.getChatView()?.reloadSession();
+  }
+
+  /** Create a brand-new blank session and switch into it. */
+  async newSession(): Promise<void> {
+    await this.saveActiveSession();
+    const created = await this.sessions.create();
+    this.applySessionToRuntime(created);
+    await this.sessions.setActive(created.id);
+  }
+
+  /** Switch to an existing session by id. No-op if already active. */
+  async switchSession(id: string): Promise<void> {
+    if (id === this.activeSessionId) return;
+    await this.saveActiveSession();
+    const target = await this.sessions.load(id);
+    if (!target) {
+      new Notice(`Session not found: ${id}`);
+      return;
+    }
+    this.applySessionToRuntime(target);
+    await this.sessions.setActive(target.id);
+  }
+
+  private async showSessionPicker(): Promise<void> {
+    const list = await this.sessions.list();
+    new SessionPickerModal(this.app, list, (item) => {
+      void this.switchSession(item.id);
+    }).open();
+  }
+
+  private async renameActiveSession(): Promise<void> {
+    if (!this.sessions || !this.activeSessionId) return;
+    const current = await this.sessions.load(this.activeSessionId);
+    const title = await promptSessionTitle(this.app, current?.title ?? "New chat");
+    if (title === null) return;
+    // Flush the live runtime first so the rename doesn't clobber unsaved
+    // chat history with a stale on-disk copy.
+    await this.saveActiveSession();
+    const renamed = await this.sessions.rename(this.activeSessionId, title);
+    if (renamed) new Notice(`Renamed to "${renamed.title}".`);
+  }
+
+  private async deleteActiveSession(): Promise<void> {
+    if (!this.sessions || !this.activeSessionId) return;
+    const current = await this.sessions.load(this.activeSessionId);
+    const title = current?.title ?? "New chat";
+    const confirmed = await confirmDeleteSession(this.app, title);
+    if (!confirmed) return;
+    const { replacement } = await this.sessions.remove(this.activeSessionId);
+    if (replacement) {
+      this.applySessionToRuntime(replacement);
+    }
+    new Notice(`Deleted "${title}".`);
+  }
+
+  /**
+   * Reload the active session from disk without creating/switching
+   * sessions. Public so the chat view's "Reload" action can re-sync
+   * in-memory state after a session file was edited externally (e.g. to
+   * trim an oversized tool result that was blowing out the model's context
+   * window).
+   */
+  async reloadActiveSessionFromDisk(): Promise<void> {
+    if (!this.sessions || !this.activeSessionId) return;
+    const reloaded = await this.sessions.load(this.activeSessionId);
+    if (!reloaded) return;
+    this.applySessionToRuntime(reloaded);
   }
 
   // ─── Settings persistence ────────────────────────────────────────────
@@ -372,6 +494,11 @@ export default class ChatPlugin extends Plugin {
     this.getChatView()?.updateModel(
       getModelDisplayName(this.settings.provider, this.settings.model)
     );
+
+    // Profile/effort (and other settings) are captured per-session; persist
+    // the active session so the change survives a restart. Best-effort and
+    // fire-and-forget — settings save must not block on session I/O.
+    void this.saveActiveSession();
   }
 
   /** Load the correct API key when provider changes */
@@ -397,18 +524,6 @@ export default class ChatPlugin extends Plugin {
     } catch {
       // SecretStorage not available
     }
-  }
-
-  private async readFirstExisting(paths: string[]): Promise<string> {
-    let lastError: unknown;
-    for (const path of paths) {
-      try {
-        return await this.app.vault.adapter.read(path);
-      } catch (e) {
-        lastError = e;
-      }
-    }
-    throw lastError;
   }
 
   private async migrateLegacyPluginData(): Promise<void> {
@@ -505,13 +620,6 @@ export default class ChatPlugin extends Plugin {
   private get legacyChatStatePath(): string {
     return `${this.legacyPluginDataDir}/chat-state.json`;
   }
-}
-
-function isPersistedChatState(value: unknown): value is {
-  chatHistory?: ChatPlugin["chatHistory"];
-  agentMessages?: Parameters<AgentLoop["importMessages"]>[0];
-} {
-  return typeof value === "object" && value !== null;
 }
 
 function normalizeSettings(value: unknown): Partial<ChatSettings> {
