@@ -433,6 +433,61 @@ export class ChatSettingTab extends PluginSettingTab {
             })
         );
     }
+
+    // ─── Session Workspaces ─────────────────────────────────────────────
+    new Setting(containerEl).setName("Conversations").setHeading();
+
+    new Setting(containerEl)
+      .setName("Max concurrent conversations")
+      .setDesc("How many conversations may run a turn at the same time. Others queue until a slot frees up. Desktop default 3, mobile default 2.")
+      .addSlider((slider) =>
+        slider
+          .setLimits(1, 6, 1)
+          .setValue(s.maxConcurrentSessions)
+          .setDynamicTooltip()
+          .onChange(async (value) => {
+            s.maxConcurrentSessions = value;
+            await this.plugin.saveSettings();
+          })
+      );
+
+    new Setting(containerEl)
+      .setName("Max hydrated conversations")
+      .setDesc("How many conversations may be kept live in memory at once. Idle conversations beyond this are evicted (their data is safe on disk; they simply stop being 'hot').")
+      .addSlider((slider) =>
+        slider
+          .setLimits(2, 24, 1)
+          .setValue(s.maxHydratedSessions)
+          .setDynamicTooltip()
+          .onChange(async (value) => {
+            s.maxHydratedSessions = value;
+            await this.plugin.saveSettings();
+          })
+      );
+
+    new Setting(containerEl)
+      .setName("Notify on background completion")
+      .setDesc("Show a notice when a conversation you aren't currently viewing finishes or errors.")
+      .addToggle((toggle) =>
+        toggle
+          .setValue(s.notifyBackgroundSessionCompletion)
+          .onChange(async (value) => {
+            s.notifyBackgroundSessionCompletion = value;
+            await this.plugin.saveSettings();
+          })
+      );
+
+    new Setting(containerEl)
+      .setName("Keep conversation rail open on wide panes")
+      .setDesc("Remember whether the conversation browser stays pinned open as a rail on wide desktop windows.")
+      .addToggle((toggle) =>
+        toggle
+          .setValue(s.sessionManagerPinnedOnWideViews)
+          .onChange(async (value) => {
+            s.sessionManagerPinnedOnWideViews = value;
+            await this.plugin.saveSettings();
+          })
+      );
   }
 }
 

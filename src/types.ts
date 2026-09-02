@@ -17,6 +17,16 @@ export interface ChatSettings {
   customInstructions: string;
   /** Id of the selected default Prompt Profile (Markdown file under AI/Prompts). Null = no profile / global defaults. */
   activeProfileId: string | null;
+
+  // ─── Session Workspaces ─────────────────────────────────────────────
+  /** Max sessions allowed to run a turn concurrently. Desktop default 3, mobile default 2. Range 1-6. */
+  maxConcurrentSessions: number;
+  /** Max hydrated SessionRuntimes retained in memory (idle-LRU evicted beyond this). Default 8, range 2-24. */
+  maxHydratedSessions: number;
+  /** Show an in-app Notice when a non-visible session finishes/errors. */
+  notifyBackgroundSessionCompletion: boolean;
+  /** Remember whether the session browser rail is pinned open on wide desktop panes. */
+  sessionManagerPinnedOnWideViews: boolean;
 }
 
 export const DEFAULT_SETTINGS: ChatSettings = {
@@ -28,6 +38,10 @@ export const DEFAULT_SETTINGS: ChatSettings = {
   reasoningEffort: "auto",
   customInstructions: "",
   activeProfileId: null,
+  maxConcurrentSessions: 3,
+  maxHydratedSessions: 8,
+  notifyBackgroundSessionCompletion: true,
+  sessionManagerPinnedOnWideViews: false,
 };
 
 /**

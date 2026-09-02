@@ -5,10 +5,18 @@ import {
   assertImageRefEnvelope,
   type ImageResolver,
 } from "../context/image-resolver";
+import type { ProviderConversationState } from "./provider-session-state";
 
 export interface ProviderRequestContext {
   /** Present for normal AgentLoop requests; optional for text-only connection tests. */
   images?: ImageResolver;
+  /**
+   * Per-SessionRuntime mutable provider continuation state (e.g. OpenAI's
+   * `previous_response_id`). Must never be a module-level global — each
+   * runtime owns its own instance. Optional for one-off calls (e.g. the
+   * settings "Test connection" check) that never chain turns.
+   */
+  providerState?: ProviderConversationState;
 }
 
 export function imageRefsForMessage(message: UnifiedMessage): ContextRef[] {

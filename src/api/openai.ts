@@ -9,26 +9,21 @@ import type {
 import { resolveReasoningConfig } from "../model/reasoning";
 import type { ProviderRequestContext } from "./vision";
 import { buildResponsesVisionContent } from "./vision";
+import { buildResponsesHistoryInput } from "./responses-history";
 
 const DEFAULT_OPENAI_URL = "https://api.openai.com";
-
-/**
- * Stores raw output items from each API response so they can be replayed
- * verbatim in subsequent requests. The Responses API requires exact
- * function_call items (with all fields) when sending function_call_output.
- */
-let previousResponseId: string | null = null;
-
-/** Clear stored state (call on conversation clear) */
-export function clearOpenAIState(): void {
-  previousResponseId = null;
-}
 
 /**
  * Sends a message to OpenAI via the Responses API (/v1/responses).
  * Uses the `previous_response_id` field for multi-turn, which lets
  * OpenAI manage conversation state server-side and avoids us having to
  * reconstruct function_call items.
+ *
+ * Conversation continuity (`previous_response_id`) is carried in
+ * `requestContext.providerState` — a per-SessionRuntime object, never a
+ * module-level global. This is required for correctness once multiple
+ * sessions can run concurrently: a module global would let session B's
+ * continuation id leak into session A's request (or vice versa).
  */
 export async function sendOpenAIMessage(
   settings: ChatSettings,
@@ -40,8 +35,21 @@ export async function sendOpenAIMessage(
   const baseUrl = DEFAULT_OPENAI_URL;
   const model = settings.model || "gpt-5.3-codex";
 
-  // Build input: only the NEW items for this turn
-  const input = await buildCurrentTurnInput(messages, systemPrompt, requestContext?.images);
+  const openaiState = requestContext?.providerState?.openai;
+  const usePreviousResponse = !!openaiState
+    && !openaiState.requiresHistoryReplay
+    && !!openaiState.previousResponseId;
+
+  // Build input. When there is no trusted server-side continuation id
+  // (first request after hydration/restart, or no providerState at all —
+  // e.g. a one-off settings connection test), replay the full history and
+  // omit previous_response_id. Otherwise send only this turn's new items.
+  const input = usePreviousResponse
+    ? await buildCurrentTurnInput(messages, requestContext?.images)
+    : [
+        { type: "message", role: "developer", content: systemPrompt },
+        ...(await buildResponsesHistoryInput(messages, requestContext?.images)),
+      ];
 
   const body: Record<string, unknown> = {
     model,
@@ -49,8 +57,8 @@ export async function sendOpenAIMessage(
   };
 
   // Chain to previous response for multi-turn context
-  if (previousResponseId) {
-    body.previous_response_id = previousResponseId;
+  if (usePreviousResponse) {
+    body.previous_response_id = openaiState!.previousResponseId;
   }
 
   // Reasoning for reasoning-capable models
@@ -109,8 +117,11 @@ export async function sendOpenAIMessage(
 
   const data = asRecord(response.json as unknown);
 
-  // Store response ID for chaining
-  previousResponseId = typeof data.id === "string" ? data.id : null;
+  // Store response ID for chaining, scoped to this runtime's provider state only.
+  if (openaiState) {
+    openaiState.previousResponseId = typeof data.id === "string" ? data.id : null;
+    openaiState.requiresHistoryReplay = false;
+  }
 
   return fromResponsesOutput(data);
 }
@@ -118,41 +129,19 @@ export async function sendOpenAIMessage(
 // ─── Input Building ─────────────────────────────────────────────────────────
 
 /**
- * Builds input items for the current turn only.
- * When using previous_response_id, we only need to send:
- * - On first call: system message + user message
+ * Builds input items for the current turn only. Only called when a trusted
+ * `previous_response_id` is available (i.e. we are NOT replaying full
+ * history), so we only need to send:
  * - On tool result calls: function_call_output items
  * - On follow-up user messages: user message
  */
 async function buildCurrentTurnInput(
   messages: UnifiedMessage[],
-  systemPrompt: string,
   resolver?: ProviderRequestContext["images"]
 ): Promise<Record<string, unknown>[]> {
   const items: Record<string, unknown>[] = [];
 
-  // If no previous response (first call), include all messages
-  if (!previousResponseId) {
-    items.push({
-      type: "message",
-      role: "developer",
-      content: systemPrompt,
-    });
-
-    for (const msg of messages) {
-      if (typeof msg.content === "string") {
-        const visionContent = await buildResponsesVisionContent(msg, resolver);
-        items.push({
-          type: "message",
-          role: msg.role === "assistant" ? "assistant" : "user",
-          content: visionContent ?? msg.content,
-        });
-      }
-    }
-    return items;
-  }
-
-  // For subsequent calls, only send the latest turn's items
+  // Only send the latest turn's items
   const lastMsg = messages[messages.length - 1];
   if (!lastMsg) return items;
 
