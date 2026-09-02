@@ -5,6 +5,7 @@ import type ChatPlugin from "../main";
 import ChatContainer from "./ChatContainer.svelte";
 import type { ToolResult, SelectionScope } from "../types";
 import type { ContextRef } from "../context/refs";
+import { ImageIngestService } from "../context/image-ingest";
 import { getModelDisplayName } from "../settings";
 
 export const VIEW_TYPE_CHAT = "ochatting-view";
@@ -18,6 +19,7 @@ interface ChatContainerProps {
   onClear: () => void;
   onReload: () => void;
   onStop: () => void;
+  onAttachFiles: (files: File[]) => Promise<void>;
 }
 
 interface ChatContainerApi extends Record<string, unknown> {
@@ -50,10 +52,12 @@ export class ObsidianChatView extends ItemView {
   private plugin: ChatPlugin;
   private chatContainer: ChatContainerApi | undefined;
   private running = false;
+  private readonly imageIngest: ImageIngestService;
 
   constructor(leaf: WorkspaceLeaf, plugin: ChatPlugin) {
     super(leaf);
     this.plugin = plugin;
+    this.imageIngest = new ImageIngestService(this.app);
   }
 
   getViewType(): string {
@@ -90,6 +94,7 @@ export class ObsidianChatView extends ItemView {
         onClear: () => this.handleClear(),
         onReload: () => void this.handleReload(),
         onStop: () => this.handleStop(),
+        onAttachFiles: (files: File[]) => this.handleAttachFiles(files),
       },
     });
 
@@ -138,6 +143,32 @@ export class ObsidianChatView extends ItemView {
   /** Programmatically send a message */
   sendMessage(text: string): void {
     void this.handleUserMessage(text, this.chatContainer?.getSelection() ?? null);
+  }
+
+  /**
+   * Copies device/pasted image files into the vault (respecting the user's
+   * configured attachment folder) and attaches the resulting ContextRefs to
+   * the composer. Partial success is expected: one bad file must not
+   * discard the others, and the composer's existing count/byte guardrails
+   * are enforced per-ref via `addContextRef` (backed by `mergeContextRefs`).
+   */
+  private async handleAttachFiles(files: File[]): Promise<void> {
+    const sourcePath = this.app.workspace.getActiveFile()?.path ?? "";
+    const result = await this.imageIngest.importFiles(files, sourcePath);
+
+    for (const error of result.errors) {
+      new Notice(error);
+    }
+    for (const ref of result.refs) {
+      try {
+        this.chatContainer?.addContextRef(ref);
+      } catch (error) {
+        // The copied vault file stays; only the composer attachment is
+        // rejected. Never silently delete a user-visible file to repair
+        // composer state.
+        new Notice(error instanceof Error ? error.message : String(error));
+      }
+    }
   }
 
   /** Set the selection scope and show the pill */
