@@ -37,6 +37,8 @@ export interface SessionRuntimeOptions {
   session: PersistedSession;
   agent: SessionAgentAdapter;
   persist: (session: PersistedSession) => Promise<PersistedSession>;
+  /** Forces a fresh disk read of this session's body. See SessionStore.reloadFromDisk. */
+  reloadFromDisk: (id: string) => Promise<PersistedSession | null>;
   onTerminal?: (runtime: SessionRuntime, outcome: SessionRunOutcome) => void;
 }
 
@@ -50,6 +52,7 @@ export class SessionRuntime {
   private session: PersistedSession;
   private readonly agent: SessionAgentAdapter;
   private readonly persistFn: SessionRuntimeOptions["persist"];
+  private readonly reloadFn: SessionRuntimeOptions["reloadFromDisk"];
   private readonly onTerminal?: SessionRuntimeOptions["onTerminal"];
   private readonly listeners = new Set<RuntimeListener>();
   private phase: SessionRunPhase = "idle";
@@ -64,6 +67,7 @@ export class SessionRuntime {
     this.session = options.session;
     this.agent = options.agent;
     this.persistFn = options.persist;
+    this.reloadFn = options.reloadFromDisk;
     this.onTerminal = options.onTerminal;
     this.agent.importMessages(options.session.agentMessages);
     // A hydrated/restored runtime starts with no trusted server continuation id.
@@ -258,6 +262,59 @@ export class SessionRuntime {
   async flush(): Promise<void> {
     this.session.agentMessages = this.agent.exportMessages();
     await this.persistNow();
+  }
+
+  /**
+   * Emergency recovery: re-read this session's persisted body straight off
+   * disk and replace *all* live state (chatHistory, agentMessages, draft,
+   * etc.) with it — a full replacement, never a merge.
+   *
+   * This is how a human (or an agent acting on their behalf) recovers from
+   * an oversized tool result (e.g. a huge PDF/image dumped into a tool
+   * result) that got persisted and now blows the context window on every
+   * subsequent turn: hand-edit the body file on disk
+   * (`SessionStore.pathForSessionBody(id)`) to delete/trim the offending
+   * entries, save, then call this so the *already-running* session picks up
+   * the edit without needing a full Obsidian restart or plugin
+   * disable/re-enable.
+   *
+   * Refuses while a turn is in flight (phase !== "idle"): there is no sound
+   * way to swap out chatHistory/agentMessages out from under an
+   * actively-running agent loop, so this throws rather than risk silently
+   * corrupting state. Callers should stop the run first if they want to
+   * reload.
+   */
+  async reloadFromDisk(): Promise<void> {
+    if (this.isBusy) {
+      throw new Error(
+        `"${this.session.title}" is currently ${this.phase}. Stop it before reloading from disk.`,
+      );
+    }
+    const fresh = await this.reloadFn(this.id);
+    if (!fresh) {
+      throw new Error(`Session ${this.id} was not found on disk (it may have been deleted).`);
+    }
+
+    this.session = fresh;
+    // Mirror the constructor: a reloaded session has no trusted server
+    // continuation id for the freshly-imported message set, and the agent's
+    // own in-memory history must be replaced (not merged) to match.
+    this.agent.importMessages(fresh.agentMessages);
+    this.agent.resetProviderContinuation();
+    this.refreshDerivedMetadata();
+
+    // Re-derive and persist messageCount/preview/title from the (possibly
+    // hand-trimmed) chatHistory so the catalog/hot-catalog stay in sync with
+    // the edit on disk — a manual trim does not itself update those cached
+    // summary fields. This intentionally calls persistFn directly rather
+    // than the persistNow() helper: persistNow() re-exports agentMessages
+    // from the agent first, which here would be the state we *just*
+    // imported, so it is redundant, but going through persistFn (not
+    // persistNow) keeps this method's intent explicit and avoids depending
+    // on exportMessages() reflecting the reload synchronously.
+    this.session = await this.persistFn(this.session);
+    this.touch();
+    this.emit({ type: "snapshot", snapshot: this.snapshot() });
   }
 
   private waitForUser(question: string): Promise<string> {

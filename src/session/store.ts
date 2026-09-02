@@ -186,6 +186,28 @@ export class SessionStore {
     return this.normalizeInterrupted(read.value);
   }
 
+  /**
+   * Emergency recovery primitive: forces a fresh, uncached read of a
+   * session's persisted body straight off disk via the raw vault adapter.
+   *
+   * This store never caches session bodies in memory (unlike the hot/shard
+   * metadata catalogs), so this is currently equivalent to {@link load} —
+   * it is kept as a distinct, explicitly-named method so callers (see
+   * `SessionRuntime.reloadFromDisk`) express the actual intent ("read
+   * whatever is on disk right now, ignore anything already in memory") and
+   * so that intent survives even if `load()` ever grows caching later.
+   *
+   * The file this reads is `sessionPath(id)`, i.e.
+   * `sessions-v3/data/<last-2-chars-of-id>/<id>.json` — a single JSON file
+   * containing the full session body (chatHistory, agentMessages, draft,
+   * etc.), not split across multiple files. This is what a human (or an
+   * agent acting on their behalf) hand-edits to trim an oversized tool
+   * result before invoking the "Reload" recovery path.
+   */
+  async reloadFromDisk(id: string): Promise<PersistedSession | null> {
+    return this.load(id);
+  }
+
   async save(
     input: PersistedSession,
     options: { expectRevision?: number | null } = {},
@@ -586,6 +608,15 @@ export class SessionStore {
   private sessionPath(id: string): string {
     const shard = bodyShardOf(id);
     return `${this.dataDir}/${shard}/${id}.json`;
+  }
+
+  /**
+   * Public accessor for the exact path of a session's editable body file,
+   * for recovery tooling/tests. Mirrors {@link sessionPath} exactly (single
+   * file, not sharded further) — see {@link reloadFromDisk}.
+   */
+  pathForSessionBody(id: string): string {
+    return this.sessionPath(id);
   }
 
   private metadataShardPath(key: string): string {

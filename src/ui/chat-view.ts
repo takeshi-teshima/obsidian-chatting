@@ -332,6 +332,11 @@ export class ObsidianChatView extends ItemView {
     if (this.boundSessionId) await this.openInNewPane(this.boundSessionId);
   }
 
+  /** Command-palette entry point for the same recovery path as the Reload button. */
+  async reloadCurrentFromDisk(): Promise<void> {
+    await this.handleReload();
+  }
+
   // ─── Session binding / runtime projection ──────────────────────────────
 
   private async subscribeRuntime(): Promise<void> {
@@ -485,12 +490,33 @@ export class ObsidianChatView extends ItemView {
     })();
   }
 
+  /**
+   * Emergency recovery entry point: force the bound session's runtime to
+   * re-read its persisted body from disk (see
+   * SessionManager.reloadFromDisk / SessionRuntime.reloadFromDisk),
+   * discarding in-memory state in favor of the file. This is the workflow
+   * that lets a human hand-edit an oversized session body on disk (to trim
+   * a runaway tool result) and have the already-running session pick it up
+   * without an Obsidian restart.
+   *
+   * Refuses (via a Notice, not a silent no-op) if the session is currently
+   * running a turn.
+   */
   private async handleReload(): Promise<void> {
-    if (!this.boundSessionId) return;
-    // Re-subscribing re-delivers a fresh "snapshot" from the live runtime,
-    // which reflects whatever is actually on disk/in-memory right now.
+    const id = this.boundSessionId;
+    if (!id) return;
+    try {
+      await this.plugin.sessionManager.reloadFromDisk(id);
+    } catch (e) {
+      new Notice(e instanceof Error ? e.message : String(e));
+      return;
+    }
+    // reloadFromDisk() already broadcasts a fresh "snapshot" event to this
+    // view's existing subscription; resubscribing here is redundant with
+    // that but kept for parity with other navigation paths (switchToSession
+    // etc.) that always resubscribe after a session-state change.
     await this.subscribeRuntime();
-    new Notice("Chat reloaded.");
+    new Notice("Chat reloaded from disk.");
   }
 
   private async saveDraft(): Promise<void> {

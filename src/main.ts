@@ -234,6 +234,17 @@ export default class ChatPlugin extends Plugin {
     });
 
     this.addCommand({
+      id: "reload-conversation-from-disk",
+      name: "Reload conversation from disk (recovery)",
+      checkCallback: (checking) => {
+        const view = this.getChatView();
+        if (checking) return !!view?.currentSessionId;
+        void view?.reloadCurrentFromDisk();
+        return true;
+      },
+    });
+
+    this.addCommand({
       id: "rebuild-conversation-index",
       name: "Rebuild conversation index (recovery/advanced)",
       callback: async () => {

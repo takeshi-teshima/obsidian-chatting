@@ -255,6 +255,29 @@ export class SessionManager {
     await this.rebindViewsAwayFrom(sessionId);
   }
 
+  /**
+   * Emergency recovery: force this session's live runtime to re-read its
+   * body from disk, discarding in-memory chatHistory/agentMessages/draft in
+   * favor of whatever is actually on disk right now. See
+   * SessionRuntime.reloadFromDisk for the full recovery workflow this
+   * restores (hand-edit an oversized session body, then reload without
+   * restarting Obsidian).
+   *
+   * Ensures a runtime exists first: if this session had no hydrated runtime
+   * at all, ensureRuntime() already hydrates it via a genuine disk read, so
+   * reloadFromDisk() on the resulting runtime is a (harmless, idempotent)
+   * second read that also resyncs the catalog to match the file on disk.
+   *
+   * Throws (does not silently no-op) if the session is currently running a
+   * turn — callers should surface that to the user rather than swallow it.
+   */
+  async reloadFromDisk(sessionId: string): Promise<SessionRuntimeSnapshot> {
+    const runtime = await this.ensureRuntime(sessionId);
+    await runtime.reloadFromDisk();
+    this.emit({ type: "catalog-changed", sessionId });
+    return runtime.snapshot();
+  }
+
   async setDraftForView(viewId: string, text: string, contextRefs: SessionRuntimeSnapshot["session"]["draft"]["contextRefs"]): Promise<void> {
     const id = this.viewBindings.get(viewId);
     if (!id) return;
@@ -317,6 +340,7 @@ export class SessionManager {
           throw error;
         }
       },
+      reloadFromDisk: (id) => this.store.reloadFromDisk(id),
       onTerminal: (finished, outcome) => { void this.handleTerminal(finished, outcome); },
     });
     this.runtimes.set(sessionId, runtime);
