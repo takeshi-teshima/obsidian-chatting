@@ -9,19 +9,27 @@ import type {
 import { resolveReasoningConfig } from "../model/reasoning";
 import type { ProviderRequestContext } from "./vision";
 import { buildResponsesVisionContent } from "./vision";
+import { ProviderConversationState } from "./provider-session-state";
 
 const DEFAULT_OPENAI_URL = "https://api.openai.com";
 
 /**
- * Stores raw output items from each API response so they can be replayed
- * verbatim in subsequent requests. The Responses API requires exact
- * function_call items (with all fields) when sending function_call_output.
+ * Fallback continuation state used only when a caller doesn't pass its own
+ * `requestContext.providerConversation` (e.g. an ad-hoc text-only call).
+ * Every real AgentLoop turn must pass a session-local instance — see
+ * api/provider-session-state.ts. This module used to hold a single
+ * module-global `previousResponseId`, which silently corrupted multi-turn
+ * chaining as soon as two sessions ran concurrently.
  */
-let previousResponseId: string | null = null;
+const fallbackConversationState = new ProviderConversationState();
 
-/** Clear stored state (call on conversation clear) */
+/**
+ * @deprecated No longer clears real session state (that's per-AgentLoop via
+ * ProviderConversationState.reset()). Kept only to avoid breaking any
+ * remaining caller; clears the shared fallback instance.
+ */
 export function clearOpenAIState(): void {
-  previousResponseId = null;
+  fallbackConversationState.reset();
 }
 
 /**
@@ -39,9 +47,12 @@ export async function sendOpenAIMessage(
 ): Promise<UnifiedResponse> {
   const baseUrl = DEFAULT_OPENAI_URL;
   const model = settings.model || "gpt-5.3-codex";
+  const conversation = requestContext?.providerConversation ?? fallbackConversationState;
+  conversation.prepare(settings.provider, model);
+  const previousResponseId = conversation.previousResponseId;
 
   // Build input: only the NEW items for this turn
-  const input = await buildCurrentTurnInput(messages, systemPrompt, requestContext?.images);
+  const input = await buildCurrentTurnInput(messages, systemPrompt, previousResponseId, requestContext?.images);
 
   const body: Record<string, unknown> = {
     model,
@@ -109,8 +120,8 @@ export async function sendOpenAIMessage(
 
   const data = asRecord(response.json as unknown);
 
-  // Store response ID for chaining
-  previousResponseId = typeof data.id === "string" ? data.id : null;
+  // Store response ID for chaining, scoped to this call's conversation state.
+  conversation.previousResponseId = typeof data.id === "string" ? data.id : null;
 
   return fromResponsesOutput(data);
 }
@@ -127,6 +138,7 @@ export async function sendOpenAIMessage(
 async function buildCurrentTurnInput(
   messages: UnifiedMessage[],
   systemPrompt: string,
+  previousResponseId: string | null,
   resolver?: ProviderRequestContext["images"]
 ): Promise<Record<string, unknown>[]> {
   const items: Record<string, unknown>[] = [];

@@ -58,3 +58,71 @@
   justify-content: flex-end;
   gap: 0.5em;
 }
+
+/* Session Workspaces v4.1: header session switcher bar (chat-view.ts). */
+.ochatting-session-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.4em;
+  padding: 0.3em 0.6em;
+  border-bottom: 1px solid var(--background-modifier-border);
+  flex-shrink: 0;
+}
+
+.ochatting-session-bar-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 0.92em;
+}
+
+.ochatting-session-bar-title:hover {
+  text-decoration: underline;
+}
+
+.ochatting-session-bar-btn {
+  flex: 0 0 auto;
+  padding: 0.1em 0.5em;
+  cursor: pointer;
+}
+
+.ochatting-chat-mount {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.ochatting-view-container {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.ochatting-session-suggestion-title {
+  font-weight: 600;
+}
+
+.ochatting-session-suggestion-pin,
+.ochatting-session-suggestion-status {
+  font-weight: 400;
+  color: var(--text-muted);
+  font-size: 0.85em;
+}
+
+.ochatting-session-suggestion-unread {
+  color: var(--interactive-accent);
+  font-weight: 700;
+}
+
+.ochatting-session-suggestion-preview {
+  color: var(--text-muted);
+  font-size: 0.85em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

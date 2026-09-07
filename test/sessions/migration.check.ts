@@ -43,6 +43,22 @@ function check(name: string, fn: () => void | Promise<void>): Promise<void> {
     });
 }
 
+/**
+ * SessionIndexStore has no single `load()` — it's a scalable derived index
+ * split across manifest.json/hot.json/64 shards (Recent reads only
+ * manifest+hot; Archive/search reads shards). Tests that want "every
+ * migrated session" merge the active + archived scopes, which together
+ * cover the whole index without overlap (the "active" scope already
+ * includes pinned items; only archived items are excluded from it).
+ */
+async function loadAllIndexEntries(indexStore: SessionIndexStore) {
+  const [active, archived] = await Promise.all([
+    indexStore.query({ scope: "active", limit: 200 }),
+    indexStore.query({ scope: "archived", limit: 200 }),
+  ]);
+  return [...active.items, ...archived.items];
+}
+
 async function mkScratchVault(): Promise<string> {
   return fs.mkdtemp(path.join(os.tmpdir(), "chatting-v4-scratch-"));
 }
@@ -209,8 +225,13 @@ async function main() {
     assert.equal(messages.length, 0);
   });
 
+  // This `indexStore` is a separate in-memory instance from the one
+  // constructed inside runMigration() above; it must load the manifest/hot/
+  // shard files that migration already wrote to disk before it can query.
+  await indexStore.initialize(() => Promise.resolve([]));
+
   await check("derived index has 6 entries with real messageCount/preview", async () => {
-    const entries = await indexStore.load();
+    const entries = await loadAllIndexEntries(indexStore);
     assert.equal(entries.length, 6);
     const big = entries.find((e) => e.id === "s_mtk4lort_db87b26172b94ddd");
     assert.ok(big);
@@ -233,7 +254,7 @@ async function main() {
   await check("no duplicate sessions were created by the second run", async () => {
     const all = await metadataStore.list();
     assert.equal(all.length, 6);
-    const entries = await indexStore.load();
+    const entries = await loadAllIndexEntries(indexStore);
     assert.equal(entries.length, 6);
   });
 

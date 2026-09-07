@@ -45,6 +45,14 @@ export async function runMigration(options: RunMigrationOptions): Promise<Migrat
   const journalStore = new MigrationJournalStore(options.canonicalAdapter);
   const deps = { metadataStore, historyStore, indexStore, journalStore };
 
+  // The scalable hot/sharded index (manifest.json/hot.json/shards/*.json)
+  // must be initialized before any upsert() call. On a fresh/first-run vault
+  // this is an empty rebuild — subsequent upserts below populate it session
+  // by session. `ChatPlugin.initializeSessionStorage()` also calls
+  // `SessionWorkspaceStore.initialize()` after migration returns, which is a
+  // no-op here since the manifest already exists by then.
+  await indexStore.initialize(() => Promise.resolve([]));
+
   const summary: MigrationSummary = {
     migratedCount: 0,
     skippedCount: 0,

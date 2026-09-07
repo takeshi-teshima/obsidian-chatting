@@ -7,10 +7,11 @@ import {
   TFile,
   type TAbstractFile,
 } from "obsidian";
-import type { ChatSettings, SelectionScope, UnifiedMessage } from "./types";
+import type { ChatSettings, SelectionScope } from "./types";
 import { DEFAULT_SETTINGS, CHATGPT_OAUTH_DEFAULT_MODEL } from "./types";
 import { ChatSettingTab, getModelDisplayName } from "./settings";
 import { ObsidianChatView, VIEW_TYPE_CHAT } from "./ui/chat-view";
+import { SessionSwitcherModal } from "./ui/session-switcher-modal";
 import { AgentLoop } from "./agent/loop";
 import { ChatGPTOAuthStore } from "./auth/chatgptOAuthStore";
 import { ChatGPTOAuthService } from "./auth/chatgptOAuth";
@@ -20,11 +21,14 @@ import { ObsidianLegacyReadAdapter } from "./sessions/obsidian-legacy-read-adapt
 import { SessionMetadataStore } from "./sessions/metadata/store";
 import { ChattingHistoryStore } from "./sessions/history/store";
 import { SessionIndexStore } from "./sessions/index/store";
-import { createSessionMetadata } from "./sessions/metadata/factory";
-import { toConversationMeta } from "./sessions/index/derived-index";
+import { SessionLocalStateStore } from "./sessions/local/store";
+import { SessionWorkspaceStore, type CreateSessionInput } from "./sessions/store";
 import { runMigration } from "./sessions/migration/run-migration";
 import { loadActiveSessionId, saveActiveSessionId } from "./sessions/runtime/active-session";
-import { deriveDisplayHistory, type DisplayEntry } from "./sessions/display-history";
+import { SessionManager, type SessionAgentFactory } from "./sessions/runtime/manager";
+import { AgentLoopSessionAdapter } from "./sessions/runtime/agent-loop-adapter";
+import type { SessionAgentAdapter } from "./sessions/runtime/runtime";
+import { getChattingProviderState, type SessionMetadata } from "./sessions/metadata/types";
 
 const PLUGIN_ID = "chatting-with-ai";
 const LEGACY_PLUGIN_ID = "obsidian-chatting";
@@ -35,27 +39,22 @@ const LEGACY_CHATGPT_OAUTH_SECRET_KEY = `${LEGACY_PLUGIN_ID}-chatgpt-oauth`;
 
 export default class ChatPlugin extends Plugin {
   settings: ChatSettings = DEFAULT_SETTINGS;
-  /** Shared agent loop that persists across view open/close cycles */
-  agent!: AgentLoop;
   /** ChatGPT OAuth service (used by the chatgpt-oauth provider). */
   chatgptOAuth!: ChatGPTOAuthService;
-  /** Chat messages for replaying into the UI when the view reopens. Display-only,
-   * re-derived from canonical UnifiedMessage history — see sessions/display-history.ts. */
-  chatHistory: DisplayEntry[] = [];
 
-  /** Session Workspaces v4 canonical storage (`.chatting/...` at the vault root). */
+  /** Session Workspaces v4.1 canonical storage (`.chatting/...` at the vault root). */
   private sessionAdapter!: ObsidianSessionStorageAdapter;
-  private metadataStore!: SessionMetadataStore;
-  private historyStore!: ChattingHistoryStore;
-  private indexStore!: SessionIndexStore;
+  private sessionStore!: SessionWorkspaceStore;
   /**
-   * Id of the single session this plugin's one visible chat pane is bound
-   * to. See sessions/runtime/active-session.ts for why this is NOT part of
-   * SessionMetadata, and the migration report for why multi-session
-   * concurrent binding (v3's SessionManager/SessionSwitcher) was not
-   * re-ported in this pass.
+   * Owns every hydrated per-session runtime (one AgentLoop + one
+   * ProviderConversationState each). There is intentionally no
+   * plugin-global `agent`/`chatHistory`/`activeSessionId` any more — each
+   * ObsidianChatView leaf binds to a session id independently, and a
+   * session's runtime lives exactly as long as it is hydrated, regardless
+   * of which (if any) leaf is currently looking at it. See
+   * sessions/runtime/manager.ts and CHAT_VIEW_INTEGRATION.md.
    */
-  private activeSessionId!: string;
+  sessionManager!: SessionManager;
 
   async onload(): Promise<void> {
     await this.migrateLegacyPluginData();
@@ -67,16 +66,28 @@ export default class ChatPlugin extends Plugin {
     this.chatgptOAuth = new ChatGPTOAuthService(oauthStore);
     setChatGPTOAuthService(this.chatgptOAuth);
 
-    this.agent = new AgentLoop(this.app, this.settings);
-
     this.sessionAdapter = new ObsidianSessionStorageAdapter(this.app);
-    this.metadataStore = new SessionMetadataStore(this.sessionAdapter);
-    this.historyStore = new ChattingHistoryStore(this.sessionAdapter);
-    this.indexStore = new SessionIndexStore(this.sessionAdapter);
+    this.sessionStore = new SessionWorkspaceStore(
+      new SessionMetadataStore(this.sessionAdapter),
+      new ChattingHistoryStore(this.sessionAdapter),
+      new SessionLocalStateStore(this.sessionAdapter),
+      new SessionIndexStore(this.sessionAdapter),
+    );
+    this.sessionManager = new SessionManager({
+      store: this.sessionStore,
+      agentFactory: this.buildAgentFactory(),
+      getDefaultSessionSeed: () => this.defaultSessionSeed(),
+      maxConcurrentRuns: 3,
+      maxHydratedRuntimes: 8,
+      onBackgroundCompletion: (sessionId, outcome) => {
+        if (outcome === "error") new Notice(`A background conversation hit an error (${sessionId.slice(0, 12)}…).`);
+      },
+    });
 
-    // Restore persisted chat history (runs v3/branch-11/legacy migration
-    // into `.chatting/` canonical storage on first run; idempotent after).
-    await this.loadChatHistory();
+    // Runs v3/branch-11/legacy migration into `.chatting/` canonical storage
+    // on first run (idempotent after), then builds/loads the scalable
+    // hot/sharded navigation index.
+    await this.initializeSessionStorage();
 
     this.addSettingTab(new ChatSettingTab(this.app, this));
 
@@ -126,7 +137,63 @@ export default class ChatPlugin extends Plugin {
     this.addCommand({
       id: "reload-conversation-from-disk",
       name: "Reload conversation from disk (recovery)",
-      callback: () => void this.reloadActiveSessionFromDisk(),
+      callback: () => {
+        const view = this.getChatView();
+        if (!view) { new Notice("No active conversation."); return; }
+        void view.reloadFromDiskCommand();
+      },
+    });
+
+    // ─── Session Workspaces v4.1: multi-session commands ─────────────────
+    // Kept as command-palette fallbacks alongside the per-view header UI, per
+    // MERGE_INSTRUCTIONS.md ("Required commands/actions").
+
+    this.addCommand({
+      id: "new-conversation",
+      name: "New conversation",
+      callback: () => void this.newConversation(),
+    });
+
+    this.addCommand({
+      id: "switch-conversation",
+      name: "Switch conversation…",
+      callback: () => this.openSwitcherForActiveView(),
+    });
+
+    this.addCommand({
+      id: "rename-conversation",
+      name: "Rename conversation",
+      callback: () => void this.renameActiveConversation(),
+    });
+
+    this.addCommand({
+      id: "pin-conversation",
+      name: "Pin/unpin conversation",
+      callback: () => void this.togglePinActiveConversation(),
+    });
+
+    this.addCommand({
+      id: "archive-conversation",
+      name: "Archive/unarchive conversation",
+      callback: () => void this.toggleArchiveActiveConversation(),
+    });
+
+    this.addCommand({
+      id: "fork-conversation",
+      name: "Fork conversation",
+      callback: () => void this.forkActiveConversation(),
+    });
+
+    this.addCommand({
+      id: "delete-conversation",
+      name: "Delete conversation",
+      callback: () => void this.deleteActiveConversation(),
+    });
+
+    this.addCommand({
+      id: "stop-conversation",
+      name: "Stop current conversation",
+      callback: () => void this.stopActiveConversation(),
     });
 
     // Editor command: chat about the current note (only when editor is active)
@@ -200,7 +267,10 @@ export default class ChatPlugin extends Plugin {
   }
 
   onunload(): void {
-    void this.saveChatHistory();
+    // Only plugin unload owns global shutdown: abort every active runtime
+    // and best-effort flush each to disk. Closing/switching an individual
+    // ChatView leaf must never do this (see sessions/runtime/manager.ts).
+    void this.sessionManager?.shutdown();
   }
 
   // ─── Chat operations ────────────────────────────────────────────────
@@ -284,9 +354,22 @@ export default class ChatPlugin extends Plugin {
     // On mobile, this slides in as a panel from the right edge.
     const leaf = workspace.getRightLeaf(false);
     if (leaf) {
-      await leaf.setViewState({ type: VIEW_TYPE_CHAT, active: true });
+      // Seed the very first leaf with the last-bound session (if any) so a
+      // fresh Obsidian window doesn't always default to "most recently
+      // active" when the user had a different session open when they quit.
+      const remembered = await loadActiveSessionId(this.sessionAdapter);
+      await leaf.setViewState({
+        type: VIEW_TYPE_CHAT,
+        active: true,
+        state: remembered ? { sessionId: remembered } : undefined,
+      });
       await workspace.revealLeaf(leaf);
     }
+  }
+
+  /** Persists the last-bound session id as a convenience default for the next freshly created leaf (e.g. after an Obsidian restart). */
+  async rememberActiveSession(sessionId: string): Promise<void> {
+    await saveActiveSessionId(this.sessionAdapter, sessionId);
   }
 
   /** Get the active ObsidianChatView using proper instanceof check (deferred view safe) */
@@ -330,62 +413,24 @@ export default class ChatPlugin extends Plugin {
     }
   }
 
-  // ─── Session Workspaces v4 persistence ─────────────────────────────────
+  // ─── Session Workspaces v4.1 multi-session runtime ─────────────────────
   //
   // Canonical storage is `.chatting/session-metadata/<id>.meta.json` +
   // `.chatting/sessions/<id>.jsonl` (Claudian-shaped metadata + Chatting-
-  // native UnifiedMessage JSONL transcript). See src/sessions/ and
-  // MIGRATION_HANDOFF.md / MERGE_INSTRUCTIONS.md for the full contract.
-
-  /** Persist the active session's transcript + metadata after a turn. */
-  async saveChatHistory(): Promise<void> {
-    try {
-      const messages = this.agent.exportMessages();
-      await this.historyStore.replace(this.activeSessionId, messages);
-
-      const loaded = await this.metadataStore.load(this.activeSessionId);
-      const now = Date.now();
-      const metadata = loaded?.metadata ?? createSessionMetadata({
-        id: this.activeSessionId,
-        historyPath: this.historyStore.pathFor(this.activeSessionId),
-      });
-      metadata.lastActivityAt = now;
-      if (!metadata.title || metadata.title === "New chat") {
-        metadata.title = deriveTitleFromMessages(messages) ?? metadata.title ?? "New chat";
-      }
-      metadata.selectedModel = this.settings.model;
-      metadata.providerState = {
-        ...(metadata.providerState ?? {}),
-        history: {
-          format: "unified-message-jsonl",
-          schemaVersion: 1,
-          path: this.historyStore.pathFor(this.activeSessionId),
-          revision: (((metadata.providerState as { history?: { revision?: number } } | undefined)?.history?.revision) ?? 0) + 1,
-        },
-        upstreamProvider: this.settings.provider,
-        profileId: this.settings.activeProfileId,
-        reasoningEffort: this.settings.reasoningEffort,
-      };
-      await this.metadataStore.save(metadata, loaded?.unknownFields);
-
-      await this.indexStore.upsert(
-        toConversationMeta(metadata, {
-          messageCount: messages.length,
-          preview: derivePreviewFromMessages(messages),
-        }),
-      );
-    } catch {
-      // Persistence is best-effort, matching the previous chat-state.json behavior.
-    }
-  }
+  // native UnifiedMessage JSONL transcript). `SessionManager` (constructed in
+  // onload) owns every hydrated per-session runtime; persistence-per-turn is
+  // now the runtime's job (sessions/runtime/runtime.ts checkpoints after
+  // every assistant/tool-result/error and on run completion), not something
+  // the plugin drives directly. See src/sessions/ and MIGRATION_HANDOFF.md /
+  // MERGE_INSTRUCTIONS.md / CHAT_VIEW_INTEGRATION.md for the full contract.
 
   /**
    * Boot-time restore: runs the (idempotent, non-destructive) v3/branch-11/
    * legacy-chat-state migration into `.chatting/` canonical storage, then
-   * loads whichever session is active into the in-memory agent + display
-   * history.
+   * initializes (or, on first run after this migration, rebuilds) the
+   * scalable hot/sharded navigation index the SessionManager's query() reads.
    */
-  async loadChatHistory(): Promise<void> {
+  private async initializeSessionStorage(): Promise<void> {
     try {
       const summary = await runMigration({
         canonicalAdapter: this.sessionAdapter,
@@ -407,95 +452,160 @@ export default class ChatPlugin extends Plugin {
       console.error("[chatting-with-ai] v4 migration failed to run", error);
     }
 
-    this.activeSessionId = await this.resolveActiveSessionId();
-    await this.hydrateFromActiveSession();
-  }
+    await this.sessionStore.initialize();
 
-  /**
-   * Explicit "reload this session from disk" recovery path (see the plugin
-   * brief's "restore the reload-from-disk recovery feature under the new
-   * schema" requirement). Re-reads `.chatting/sessions/<id>.jsonl` fresh,
-   * fully replaces in-memory history (never merges), resets provider
-   * continuation state, re-derives + persists lastActivityAt/preview/
-   * messageCount-equivalent metadata, and re-renders the bound view.
-   */
-  async reloadActiveSessionFromDisk(): Promise<void> {
-    const view = this.getChatView();
-    if (view?.isRunning()) {
-      new Notice("Can't reload from disk while a response is in progress. Stop it first.");
-      return;
-    }
-
-    try {
-      const freshMessages = await this.historyStore.load(this.activeSessionId);
-      this.agent.importMessages(freshMessages);
-      this.agent.resetContinuationState();
-      this.chatHistory = deriveDisplayHistory(freshMessages);
-
-      const loaded = await this.metadataStore.load(this.activeSessionId);
-      if (loaded) {
-        loaded.metadata.lastActivityAt = Date.now();
-        await this.metadataStore.save(loaded.metadata, loaded.unknownFields);
-        await this.indexStore.upsert(
-          toConversationMeta(loaded.metadata, {
-            messageCount: freshMessages.length,
-            preview: derivePreviewFromMessages(freshMessages),
-          }),
-        );
-      }
-
-      view?.rerenderFromPluginState();
-      new Notice("Conversation reloaded from disk.");
-    } catch (error) {
-      new Notice(`Reload from disk failed: ${error instanceof Error ? error.message : String(error)}`);
+    // If no session exists at all yet (fresh vault, migration produced
+    // nothing), seed exactly one blank session so the first view has
+    // something to bind to.
+    const stats = await this.sessionStore.getStats();
+    if (stats.activeCount === 0 && stats.archivedCount === 0) {
+      await this.sessionManager.createSession();
     }
   }
 
-  /** Load the active session's transcript into the agent + display history. */
-  private async hydrateFromActiveSession(): Promise<void> {
-    const messages = await this.historyStore.load(this.activeSessionId);
-    this.agent.importMessages(messages);
-    this.chatHistory = deriveDisplayHistory(messages);
+  /** Builds a fresh per-session AgentLoop + SessionAgentAdapter. Never shares one AgentLoop instance across sessions. */
+  private buildAgentFactory(): SessionAgentFactory {
+    return {
+      create: (metadata: SessionMetadata): SessionAgentAdapter => {
+        const state = getChattingProviderState(metadata);
+        const provider = isProvider(state.upstreamProvider) ? state.upstreamProvider : this.settings.provider;
+        const sessionSettings: ChatSettings = {
+          ...this.settings,
+          provider,
+          apiKey: this.loadApiKey(provider),
+          model: metadata.selectedModel || this.settings.model,
+          activeProfileId: state.profileId !== undefined ? state.profileId : this.settings.activeProfileId,
+          reasoningEffort: isReasoningEffort(state.reasoningEffort) ? state.reasoningEffort : this.settings.reasoningEffort,
+          enableWebSearch: state.webSearch ?? this.settings.enableWebSearch,
+        };
+        const agent = new AgentLoop(this.app, sessionSettings);
+        return new AgentLoopSessionAdapter(agent, {
+          resetProviderContinuation: () => agent.resetContinuationState(),
+          applySessionMetadata: (next) => {
+            const nextState = getChattingProviderState(next);
+            agent.updateSettings({
+              model: next.selectedModel || sessionSettings.model,
+              activeProfileId: nextState.profileId !== undefined ? nextState.profileId : sessionSettings.activeProfileId,
+              reasoningEffort: isReasoningEffort(nextState.reasoningEffort) ? nextState.reasoningEffort : sessionSettings.reasoningEffort,
+            });
+          },
+        });
+      },
+    };
   }
 
-  /**
-   * Picks which session the single visible pane binds to on startup: the
-   * previously-bound session if it still exists, otherwise the
-   * most-recently-active non-archived migrated session, otherwise a fresh
-   * blank v4 session. Mirrors MIGRATION_HANDOFF.md §5's "old activeSessionId
-   * may be used once to select the initial migrated session/view binding".
-   */
-  private async resolveActiveSessionId(): Promise<string> {
-    const remembered = await loadActiveSessionId(this.sessionAdapter);
-    if (remembered && await this.metadataStore.load(remembered)) {
-      return remembered;
-    }
-
-    const all = await this.metadataStore.list();
-    const candidate = all.find((entry) => !entry.metadata.isArchived) ?? all[0];
-    const resolved = candidate
-      ? candidate.metadata.id
-      : await this.createBlankSession();
-
-    await saveActiveSessionId(this.sessionAdapter, resolved);
-    return resolved;
-  }
-
-  private async createBlankSession(): Promise<string> {
-    const id = `s_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
-    const metadata = createSessionMetadata({
-      id,
+  private defaultSessionSeed(): CreateSessionInput {
+    return {
       title: "New chat",
       selectedModel: this.settings.model,
       upstreamProvider: this.settings.provider,
-      historyPath: this.historyStore.pathFor(id),
       profileId: this.settings.activeProfileId,
       reasoningEffort: this.settings.reasoningEffort,
-    });
-    await this.historyStore.replace(id, []);
-    await this.metadataStore.save(metadata);
-    await this.indexStore.upsert(toConversationMeta(metadata, { messageCount: 0, preview: "" }));
-    return id;
+      webSearch: this.settings.enableWebSearch,
+    };
+  }
+
+  /** Renders a session's transcript to markdown without requiring its runtime to be hydrated. */
+  async exportTranscriptFor(sessionId: string): Promise<string> {
+    const workspace = await this.sessionStore.load(sessionId);
+    if (!workspace) return "";
+    const parts: string[] = [
+      `# Chatting with AI Transcript`,
+      ``,
+      `**Date:** ${new Date().toISOString()}`,
+      `**Title:** ${workspace.metadata.title}`,
+      ``,
+      `## Conversation`,
+      ``,
+    ];
+    for (const msg of workspace.messages) {
+      if (typeof msg.content === "string") {
+        parts.push(`### ${msg.role === "user" ? "User" : "Assistant"}`, ``, msg.content, ``);
+        continue;
+      }
+      for (const block of msg.content) {
+        if (block.type === "text" && block.text) {
+          parts.push(`### ${msg.role === "user" ? "User" : "Assistant"}`, ``, block.text, ``);
+        } else if (block.type === "tool_use") {
+          parts.push(`### Tool Call: \`${block.name}\``, ``, "```json", JSON.stringify(block.input, null, 2), "```", ``);
+        } else if (block.type === "tool_result") {
+          parts.push(`### Tool Result ${block.is_error ? "(ERROR)" : ""}`, ``, "```", block.content || "(empty)", "```", ``);
+        }
+      }
+    }
+    return parts.join("\n");
+  }
+
+  private async newConversation(): Promise<void> {
+    await this.activateView();
+    const view = this.getChatView();
+    if (!view) return;
+    const snapshot = await this.sessionManager.createSession();
+    await view.switchToSession(snapshot.metadata.id);
+  }
+
+  private openSwitcherForActiveView(): void {
+    const view = this.getChatView();
+    if (!view) { new Notice("No active conversation."); return; }
+    new SessionSwitcherModal(this.app, this.sessionManager, "active", (id) => {
+      void view.switchToSession(id);
+    }).open();
+  }
+
+  private async renameActiveConversation(): Promise<void> {
+    const view = this.getChatView();
+    const id = view?.boundSession();
+    if (!id) { new Notice("No active conversation."); return; }
+    const title = window.prompt("New conversation title:");
+    if (title && title.trim()) await this.sessionManager.rename(id, title.trim());
+  }
+
+  private async togglePinActiveConversation(): Promise<void> {
+    const view = this.getChatView();
+    const id = view?.boundSession();
+    if (!id) { new Notice("No active conversation."); return; }
+    const meta = await this.sessionManager.query({ scope: "active", limit: 1 });
+    const current = meta.items.find((m) => m.id === id);
+    await this.sessionManager.setPinned(id, !(current?.isPinned ?? false));
+  }
+
+  private async toggleArchiveActiveConversation(): Promise<void> {
+    const view = this.getChatView();
+    const id = view?.boundSession();
+    if (!id) { new Notice("No active conversation."); return; }
+    try {
+      await this.sessionManager.archive(id);
+      new Notice("Conversation archived.");
+    } catch (error) {
+      new Notice(error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  private async forkActiveConversation(): Promise<void> {
+    const view = this.getChatView();
+    const id = view?.boundSession();
+    if (!id) { new Notice("No active conversation."); return; }
+    const snapshot = await this.sessionManager.fork(id);
+    await view!.switchToSession(snapshot.metadata.id);
+  }
+
+  private async deleteActiveConversation(): Promise<void> {
+    const view = this.getChatView();
+    const id = view?.boundSession();
+    if (!id) { new Notice("No active conversation."); return; }
+    try {
+      await this.sessionManager.delete(id);
+      new Notice("Conversation deleted.");
+    } catch (error) {
+      new Notice(error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  private async stopActiveConversation(): Promise<void> {
+    const view = this.getChatView();
+    const id = view?.boundSession();
+    if (!id) { new Notice("No active conversation."); return; }
+    await this.sessionManager.stop(id);
   }
 
   // ─── Settings persistence ────────────────────────────────────────────
@@ -659,29 +769,6 @@ export default class ChatPlugin extends Plugin {
   private get legacyChatStatePath(): string {
     return `${this.legacyPluginDataDir}/chat-state.json`;
   }
-}
-
-function deriveTitleFromMessages(messages: readonly UnifiedMessage[]): string | undefined {
-  const first = messages.find((m) => m.role === "user");
-  if (!first) return undefined;
-  const text = typeof first.content === "string"
-    ? first.content
-    : first.content.find((b) => b.type === "text" && b.text)?.text ?? "";
-  const clean = text.replace(/^\[Context:[^\]]*\]\n\n/, "").replace(/\s+/g, " ").trim();
-  if (!clean) return undefined;
-  return clean.length <= 64 ? clean : `${clean.slice(0, 61).trimEnd()}...`;
-}
-
-function derivePreviewFromMessages(messages: readonly UnifiedMessage[]): string {
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const message = messages[i];
-    const text = typeof message.content === "string"
-      ? message.content
-      : message.content.find((b) => b.type === "text" && b.text)?.text ?? "";
-    const clean = text.replace(/\s+/g, " ").trim();
-    if (clean) return clean.length <= 120 ? clean : `${clean.slice(0, 117).trimEnd()}...`;
-  }
-  return "";
 }
 
 function normalizeSettings(value: unknown): Partial<ChatSettings> {

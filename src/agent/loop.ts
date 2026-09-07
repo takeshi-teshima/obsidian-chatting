@@ -7,8 +7,8 @@ import type {
   SelectionScope,
 } from "../types";
 import { sendMessage } from "../api/client";
-import { clearOpenAIState } from "../api/openai";
 import { clearChatGPTOAuthState } from "../api/chatgpt-oauth";
+import { ProviderConversationState } from "../api/provider-session-state";
 import { TOOL_DEFINITIONS } from "../tools/registry";
 import { executeTool } from "../tools/executor";
 import { buildContext } from "./context";
@@ -54,6 +54,13 @@ export class AgentLoop {
   private skills: SkillService;
   private profiles: PromptProfileService;
   private readonly imageResolver: VaultImageResolver;
+  /**
+   * Session-local Responses API continuation state (e.g. OpenAI's
+   * `previous_response_id`). One instance per AgentLoop instance — never
+   * shared across sessions — so concurrent multi-session turns never chain
+   * off each other's response ids. See api/provider-session-state.ts.
+   */
+  private readonly providerConversation = new ProviderConversationState();
 
   constructor(app: App, settings: ChatSettings) {
     this.app = app;
@@ -68,11 +75,26 @@ export class AgentLoop {
     this.aborted = true;
   }
 
+  /**
+   * Applies a partial settings patch to this loop instance only (e.g. when a
+   * session's selectedModel/profile/reasoningEffort changes while idle).
+   * Never mutates the plugin-global settings object this loop was
+   * constructed with a shallow copy of.
+   */
+  updateSettings(patch: Partial<ChatSettings>): void {
+    this.settings = { ...this.settings, ...patch };
+  }
+
+  /** Current effective settings for this session's loop (read-only snapshot). */
+  getSettings(): ChatSettings {
+    return { ...this.settings };
+  }
+
   /** Clear conversation history */
   clear(): void {
     this.messages = [];
     this.aborted = false;
-    clearOpenAIState();
+    this.providerConversation.reset();
     clearChatGPTOAuthState();
   }
 
@@ -96,7 +118,7 @@ export class AgentLoop {
    * message list instead.
    */
   resetContinuationState(): void {
-    clearOpenAIState();
+    this.providerConversation.reset();
     clearChatGPTOAuthState();
   }
 
@@ -268,7 +290,7 @@ export class AgentLoop {
           this.messages,
           TOOL_DEFINITIONS,
           systemPrompt,
-          { images: this.imageResolver }
+          { images: this.imageResolver, providerConversation: this.providerConversation }
         );
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
