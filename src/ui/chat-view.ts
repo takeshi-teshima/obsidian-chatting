@@ -10,6 +10,7 @@ import { getModelDisplayName } from "../settings";
 import { deriveDisplayHistory } from "../sessions/display-history";
 import type { SessionRuntimeEvent, SessionRuntimeSnapshot } from "../sessions/runtime/types";
 import { SessionSwitcherModal } from "./session-switcher-modal";
+import { observePaneLayout } from "./responsive/pane-layout";
 
 export const VIEW_TYPE_CHAT = "ochatting-view";
 
@@ -75,6 +76,21 @@ export class ObsidianChatView extends ItemView {
 
   private sessionBarTitleEl: HTMLElement | undefined;
 
+  /**
+   * Live pane-width layout observer (Session Workspaces v4.1, branch 11:
+   * see RESPONSIVE_SESSION_UI.md). Keys off the actual ChatView content
+   * width via ResizeObserver — never `window.innerWidth`/`Platform.isMobile`
+   * — so a narrow desktop sidebar behaves identically to a narrow mobile
+   * pane. Sets `data-ochatting-pane-layout` + `--ochatting-pane-width` on
+   * `this.contentEl` for CSS to key off (see styles.css). No in-view
+   * consumer of the mode value exists yet beyond CSS and the one-shot read
+   * below when opening SessionSwitcherModal (which mounts outside
+   * `contentEl`'s subtree via Obsidian's own Modal machinery, so it can't
+   * be reached by a descendant selector off this attribute and needs the
+   * value passed in explicitly).
+   */
+  private stopPaneLayoutObserver: (() => void) | undefined;
+
   constructor(leaf: WorkspaceLeaf, plugin: ChatPlugin) {
     super(leaf);
     this.plugin = plugin;
@@ -116,6 +132,7 @@ export class ObsidianChatView extends ItemView {
     const container = this.contentEl;
     container.empty();
     container.addClass("ochatting-view-container");
+    this.stopPaneLayoutObserver = observePaneLayout(container, () => undefined);
 
     const sessionBar = container.createDiv({ cls: "ochatting-session-bar" });
     this.sessionBarTitleEl = sessionBar.createSpan({ cls: "ochatting-session-bar-title", text: "Loading…" });
@@ -153,6 +170,8 @@ export class ObsidianChatView extends ItemView {
   }
 
   async onClose(): Promise<void> {
+    this.stopPaneLayoutObserver?.();
+    this.stopPaneLayoutObserver = undefined;
     this.runtimeUnsubscribe?.();
     this.runtimeUnsubscribe = undefined;
     if (this.boundSessionId) {
@@ -203,7 +222,15 @@ export class ObsidianChatView extends ItemView {
   private openSwitcher(): void {
     new SessionSwitcherModal(this.app, this.plugin.sessionManager, "active", (id) => {
       void this.switchToSession(id);
-    }).open();
+    }, this.currentPaneLayoutMode()).open();
+  }
+
+  /** One-shot read of the live pane-layout dataset attribute (see
+   * `stopPaneLayoutObserver` above); used only when opening a Modal, since
+   * Modals mount outside `contentEl`'s subtree and can't pick this up via CSS
+   * descendant selectors on their own. */
+  private currentPaneLayoutMode(): string | undefined {
+    return this.contentEl.dataset.ochattingPaneLayout;
   }
 
   private openSessionMenu(evt: MouseEvent): void {
@@ -221,7 +248,7 @@ export class ObsidianChatView extends ItemView {
     menu.addItem((item) => item.setTitle("Browse archived…").setIcon("folder").onClick(() => {
       new SessionSwitcherModal(this.app, manager, "archived", (archivedId) => {
         void manager.unarchive(archivedId).then(() => this.switchToSession(archivedId));
-      }).open();
+      }, this.currentPaneLayoutMode()).open();
     }));
     menu.addItem((item) => item.setTitle("Delete conversation").setIcon("trash").onClick(() => void this.deleteCurrentSession()));
     menu.showAtMouseEvent(evt);

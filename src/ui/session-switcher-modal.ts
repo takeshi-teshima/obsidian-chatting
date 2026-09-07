@@ -19,11 +19,27 @@ export class SessionSwitcherModal extends SuggestModal<ConversationMeta> {
     private readonly manager: SessionManager,
     private readonly sessionScope: "active" | "pinned" | "archived",
     private readonly onChoose: (sessionId: string) => void,
+    /**
+     * One-shot snapshot of the opening ChatView's pane-layout mode
+     * ("compact" | "regular" | "wide" | undefined), passed in because this
+     * Modal mounts outside `contentEl`'s subtree and can't inherit the
+     * `data-ochatting-pane-layout` attribute via CSS descendant selectors.
+     * Applied to the modal root so styles.css can key off it (e.g. denser
+     * suggestion rows / narrower padding in compact mode).
+     */
+    private readonly paneLayoutMode?: string,
   ) {
     super(app);
     this.setPlaceholder(
       sessionScope === "archived" ? "Search archived conversations…" : "Switch conversation…",
     );
+  }
+
+  onOpen(): void {
+    super.onOpen();
+    if (this.paneLayoutMode) {
+      this.modalEl.dataset.ochattingPaneLayout = this.paneLayoutMode;
+    }
   }
 
   async getSuggestions(query: string): Promise<ConversationMeta[]> {
