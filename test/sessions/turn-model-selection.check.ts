@@ -14,6 +14,7 @@ import type { SessionAgentAdapter, SessionAgentCallbacks } from "../../src/sessi
 import type { SessionRunRequest } from "../../src/sessions/runtime/types";
 import type { TurnExecutionConfig } from "../../src/turn-execution/types";
 import type { UnifiedMessage } from "../../src/types";
+import { stampLatestCanonicalUserMessage } from "../../src/turn-execution/provenance";
 
 let passed = 0;
 function check(name: string, fn: () => void | Promise<void>): Promise<void> {
@@ -32,14 +33,25 @@ function check(name: string, fn: () => void | Promise<void>): Promise<void> {
 }
 
 /**
+ * Deterministic poll instead of a fixed sleep(): waits for `predicate` to
+ * become true, checking every 5ms up to `timeoutMs`. Fixed sleeps here would
+ * be flaky under real fs I/O (ObsidianSessionStorageAdapter does real reads/
+ * writes) and under concurrent test-file scheduling in test/sessions/run.mjs.
+ */
+async function waitUntil(predicate: () => boolean, timeoutMs = 2000): Promise<void> {
+  const start = Date.now();
+  while (!predicate()) {
+    if (Date.now() - start > timeoutMs) throw new Error("waitUntil timed out");
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+}
+
+/**
  * Fake AgentLoop-shaped adapter that records the admitted TurnExecutionConfig
- * for every run() call and only stamps provenance the way the real
- * AgentLoopSessionAdapter does (via the session-runtime layer, not here) —
- * this fake's job is only to prove *what config the runtime handed it*, not
- * to re-implement stamping. Real provenance is asserted separately below by
- * reading back what the actual (non-fake) AgentLoopSessionAdapter/provenance
- * module would stamp, using stampLatestCanonicalUserMessage directly against
- * this fake's exported history.
+ * for every run() call and stamps provenance the way the real
+ * AgentLoopSessionAdapter does, using the real production stamping function
+ * (not a reimplementation) so the persisted-JSONL assertions below exercise
+ * actual product code, not test-only logic.
  */
 class FakeAgent implements SessionAgentAdapter {
   private messages: UnifiedMessage[] = [];
@@ -53,12 +65,11 @@ class FakeAgent implements SessionAgentAdapter {
   abort(): void { this.aborted = true; this.resolvers.shift()?.(); }
 
   async run(request: SessionRunRequest, callbacks: SessionAgentCallbacks): Promise<void> {
-    this.runs.push(structuredClone(request.execution));
-    // Mirror what AgentLoopSessionAdapter really does: stamp the canonical
-    // user message with the admitted execution config as soon as the turn
-    // starts, using the real production stamping function.
     this.messages.push({ role: "user", content: request.text });
     stampLatestCanonicalUserMessage(this.messages, request.execution);
+    // Record AFTER stamping/pushing so `waitUntil(() => runs.length >= N)`
+    // callers can safely export messages immediately once this observably ticks up.
+    this.runs.push(structuredClone(request.execution));
     callbacks.onThinking();
     await new Promise<void>((resolve) => this.resolvers.push(resolve));
     if (!this.aborted) {
@@ -71,12 +82,6 @@ class FakeAgent implements SessionAgentAdapter {
   resolveNext(): void {
     this.resolvers.shift()?.();
   }
-}
-
-import { stampLatestCanonicalUserMessage } from "../../src/turn-execution/provenance";
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 async function mkStore(): Promise<SessionWorkspaceStore> {
@@ -123,9 +128,10 @@ async function main(): Promise<void> {
     title: "B", selectedModel: "gpt-5.6-sol", upstreamProvider: "chatgpt-oauth", reasoningEffort: "high",
   })).metadata.id;
 
+  let runA1: Promise<void>;
   await check("A1 is admitted with Model X (Terra) / Medium effort", async () => {
-    void manager.run(a, { text: "A1" });
-    await sleep(20);
+    runA1 = manager.run(a, { text: "A1" });
+    await waitUntil(() => (agents.get(a)?.runs.length ?? 0) >= 1);
     assert.equal(agents.get(a)?.runs[0]?.model, "gpt-5.6-terra");
     assert.equal(agents.get(a)?.runs[0]?.reasoningEffort, "medium");
   });
@@ -136,32 +142,32 @@ async function main(): Promise<void> {
     assert.equal(agents.get(a)?.runs[0]?.reasoningEffort, "medium");
   });
 
-  let runB: Promise<void> = Promise.resolve();
+  let runB: Promise<void>;
   await check("B1 is globally queued (maxConcurrentRuns=1) with its own Sol/High snapshot captured at Send", async () => {
     runB = manager.run(b, { text: "B1" });
-    await sleep(20);
-    assert.equal(manager.getRuntimePhase(b), "queued");
+    await waitUntil(() => manager.getRuntimePhase(b) === "queued");
     // Change B's selector AFTER Send but BEFORE B1 is actually admitted from the queue.
     await manager.setNextTurnSelection(b, { provider: "chatgpt-oauth", model: "gpt-5.6-luna", reasoningEffort: "low" });
   });
 
-  const runA = check("finishing A1 lets B1 start, using the snapshot captured at ITS Send (Sol/High), not the later Luna/Low change", async () => {
+  await check("finishing A1 lets B1 start, using the snapshot captured at ITS Send (Sol/High), not the later Luna/Low change", async () => {
     agents.get(a)?.resolveNext();
-    await sleep(20);
+    await waitUntil(() => (agents.get(b)?.runs.length ?? 0) >= 1);
     assert.equal(agents.get(b)?.runs[0]?.model, "gpt-5.6-sol");
     assert.equal(agents.get(b)?.runs[0]?.reasoningEffort, "high");
+    await runA1!;
   });
-  await runA;
 
+  let runA2: Promise<void>;
   await check("A2 (sent after the mid-run selector change) uses the NEW Model Y/High selection", async () => {
     agents.get(b)?.resolveNext();
     await runB!;
-    void manager.run(a, { text: "A2" });
-    await sleep(20);
+    runA2 = manager.run(a, { text: "A2" });
+    await waitUntil(() => (agents.get(a)?.runs.length ?? 0) >= 2);
     assert.equal(agents.get(a)?.runs[1]?.model, "gpt-5.6-sol");
     assert.equal(agents.get(a)?.runs[1]?.reasoningEffort, "high");
     agents.get(a)?.resolveNext();
-    await sleep(20);
+    await runA2!;
   });
 
   await check("SessionMetadata.selectedModel always represents the next-turn model (persisted)", async () => {

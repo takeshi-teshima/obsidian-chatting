@@ -6,7 +6,9 @@
   import { parsePdfMention, buildPdfScopedContext, choosePdf } from "../context/pdf-mention";
   import { parseImageMention, buildImageScopedContext, chooseImage } from "../context/image-mention";
   import { mergeContextRefs, contextRefLabel } from "../context/ref-list";
-  import TurnModelSelector from "./TurnModelSelector.svelte";
+  import ModelSelector from "./ModelSelector.svelte";
+  import ReasoningSelector from "./ReasoningSelector.svelte";
+  import type { ComposerModelOption, ComposerReasoningOption } from "../model-selection/types";
 
   interface ChatMessage {
     id: number;
@@ -28,8 +30,13 @@
     onStop: () => void;
     /** Copies device/pasted image files into the vault and reports back ContextRefs + per-file errors. */
     onAttachFiles: (files: File[]) => Promise<void>;
-    /** Turn-level model/reasoning selector (branch 13). Always edits the NEXT send. */
-    onModelChange: (model: string) => void;
+    /**
+     * Claudian-style composer model/reasoning selection (branch 14): always
+     * edits the bound conversation's NEXT-turn selection. `onModelChange`
+     * carries providerId because a pristine (messageCount===0) conversation
+     * may switch provider through the model picker.
+     */
+    onModelChange: (providerId: string, model: string) => void;
     onReasoningChange: (effort: string) => void;
   }
 
@@ -53,9 +60,11 @@
   // reflect the header label, while these reflect the composer's editable
   // next-send selection, including models/efforts not yet known when this
   // component first mounted.
-  let turnModels = $state<{ value: string; label: string }[]>([]);
+  let turnModelOptions = $state<ComposerModelOption[]>([]);
+  let turnSelectedProviderId = $state("");
   let turnSelectedModel = $state("");
-  let turnReasoningEfforts = $state<string[]>([]);
+  let turnAllowProviderSwitch = $state(false);
+  let turnReasoningOptions = $state<ComposerReasoningOption[]>([]);
   let turnSelectedReasoningEffort = $state<string | undefined>(undefined);
   let turnPendingDiffersFromActive = $state(false);
 
@@ -204,15 +213,19 @@
    * / `providerState.reasoningEffort` — never plugin-global settings.
    */
   export function setNextTurnSelection(
-    models: { value: string; label: string }[],
+    modelOptions: ComposerModelOption[],
+    selectedProviderId: string,
     selectedModel: string,
-    reasoningEfforts: string[],
+    allowProviderSwitch: boolean,
+    reasoningOptions: ComposerReasoningOption[],
     selectedReasoningEffort: string | undefined,
     pendingDiffersFromActive: boolean,
   ): void {
-    turnModels = models;
+    turnModelOptions = modelOptions;
+    turnSelectedProviderId = selectedProviderId;
     turnSelectedModel = selectedModel;
-    turnReasoningEfforts = reasoningEfforts;
+    turnAllowProviderSwitch = allowProviderSwitch;
+    turnReasoningOptions = reasoningOptions;
     turnSelectedReasoningEffort = selectedReasoningEffort;
     turnPendingDiffersFromActive = pendingDiffersFromActive;
   }
@@ -539,18 +552,28 @@
     </div>
   {/each}
 
-  <!-- Turn-level model/reasoning selector (branch 13): edits the NEXT send,
-       not the currently running turn. Reuses branch 12's pane-layout
-       responsive attribute; see TurnModelSelector.svelte. -->
-  <TurnModelSelector
-    models={turnModels}
-    selectedModel={turnSelectedModel}
-    reasoningEfforts={turnReasoningEfforts}
-    selectedReasoningEffort={turnSelectedReasoningEffort}
-    pendingDiffersFromActive={turnPendingDiffersFromActive}
-    onModelChange={onModelChange}
-    onReasoningChange={onReasoningChange}
-  />
+  <!-- Claudian-style model/reasoning selector (branch 14): edits the NEXT
+       send, not the currently running turn. Reuses branch 12's pane-layout
+       responsive attribute; see ModelSelector.svelte/ReasoningSelector.svelte. -->
+  <div class="ochatting-turn-selector">
+    <ModelSelector
+      options={turnModelOptions}
+      selectedProviderId={turnSelectedProviderId}
+      selectedModel={turnSelectedModel}
+      allowProviderSwitch={turnAllowProviderSwitch}
+      onSelect={onModelChange}
+    />
+    <ReasoningSelector
+      options={turnReasoningOptions}
+      selected={turnSelectedReasoningEffort}
+      onSelect={onReasoningChange}
+    />
+    {#if turnPendingDiffersFromActive}
+      <span class="ochatting-turn-selector-badge" title="This response is still using the model/effort selected when you sent it. Your change applies to the next message.">
+        Next message
+      </span>
+    {/if}
+  </div>
 
   <!-- Input bar -->
   <div class="ochatting-input-bar">
@@ -815,6 +838,29 @@
   @keyframes ochatting-pulse {
     0%, 80%, 100% { opacity: 0.3; transform: scale(0.8); }
     40% { opacity: 1; transform: scale(1); }
+  }
+
+  /* ─── Turn model/reasoning selector row (branch 14) ─────────────────── */
+  .ochatting-turn-selector {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+    padding: 2px 0 6px;
+    min-width: 0;
+  }
+
+  .ochatting-turn-selector-badge {
+    font-size: 0.7em;
+    color: var(--text-accent);
+    border: 1px solid var(--text-accent);
+    border-radius: 999px;
+    padding: 1px 6px;
+    white-space: nowrap;
+  }
+
+  :global([data-ochatting-pane-layout="compact"]) .ochatting-turn-selector-badge {
+    display: none;
   }
 
   /* ─── Input Bar ─────────────────────────────────────────────────────── */

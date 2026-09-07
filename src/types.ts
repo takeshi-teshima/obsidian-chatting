@@ -6,18 +6,39 @@ export type { ReasoningEffort } from "./model/capabilities";
 import type { ReasoningEffort } from "./model/capabilities";
 import type { ContextRef } from "./context/refs";
 import type { TurnExecutionProvenance } from "./turn-execution/types";
+import type { StoredChatModelSelection } from "./model-selection/types";
 
 export interface ChatSettings {
+  /**
+   * @deprecated Legacy execution-authority fields (Settings Workspaces v4.3,
+   * branch 14). Read at most ONCE, during startup migration, to seed
+   * `lastSelectedChatModel` when no seed exists yet — see
+   * src/model-selection/settings-migration.ts and main.ts's loadSettings().
+   * No runtime/provider adapter may use `provider`/`model` here as turn
+   * execution authority; that is now `SessionMetadata.selectedModel` /
+   * `providerState.upstreamProvider` (next-turn) frozen into a
+   * `TurnExecutionConfig` at Send (this-turn). Kept present (not deleted)
+   * only so rollback to a pre-v4.3 build stays safe.
+   */
   provider: Provider;
   /** API key for `anthropic` and `openai`. Empty for `chatgpt-oauth` (which uses SecretStorage credentials). */
   apiKey: string;
+  /** @deprecated see the `provider` field's doc comment above. */
   model: string;
   maxIterations: number;
   enableWebSearch: boolean;
+  /** Default reasoning effort seed for new sessions; not execution authority for an existing session's turns. */
   reasoningEffort: ReasoningEffort;
   customInstructions: string;
   /** Id of the selected default Prompt Profile (Markdown file under AI/Prompts). Null = no profile / global defaults. */
   activeProfileId: string | null;
+  /**
+   * Claudian-style durable seed for a FUTURE pristine (messageCount === 0)
+   * conversation's provider+model. An explicit composer picker choice
+   * updates this (see model-selection/seed-coordinator.ts); existing
+   * conversations never subscribe to it. Absent until first migrated/set.
+   */
+  lastSelectedChatModel?: StoredChatModelSelection;
 }
 
 export const DEFAULT_SETTINGS: ChatSettings = {

@@ -271,20 +271,25 @@ export class SessionManager {
    * the current turn is running or queued: the active/queued request already
    * owns its own immutable TurnExecutionConfig snapshot captured at
    * admission time (see run() above), so this can never retroactively change
-   * an in-flight turn. `allowProviderSwitch` is branch-14 territory (a
-   * pristine, messageCount===0 conversation may switch provider); branch 13
-   * always calls this with the default `false`, which preserves invariant 1
-   * (one conversation, one upstream provider) for any conversation that has
-   * ever sent a message.
+   * an in-flight turn.
+   *
+   * Claudian parity (branch 14): a still-pristine conversation
+   * (`ConversationMeta.messageCount === 0` — no canonical message has been
+   * persisted yet) may switch upstream provider through this control; once
+   * any message exists, cross-provider selection is rejected by
+   * applyNextTurnSelection() without corrupting session state. This is
+   * computed here, from the derived index's messageCount, rather than
+   * accepted from the caller, so no UI layer can bypass the rule.
    */
   async setNextTurnSelection(
     sessionId: string,
     selection: TurnExecutionConfig,
-    allowProviderSwitch = false,
   ): Promise<void> {
+    const meta = await this.store.getMeta(sessionId);
+    const allowProviderSwitch = (meta?.messageCount ?? 0) === 0;
     const next = await this.store.updateMetadata(
       sessionId,
-      (metadata) => applyNextTurnSelection(metadata, selection, allowProviderSwitch),
+      (metadata) => applyNextTurnSelection(metadata, selection, { allowProviderSwitch }),
     );
     if (!next) throw new Error(`Session not found: ${sessionId}`);
     this.runtimes.get(sessionId)?.adoptMetadata(next);

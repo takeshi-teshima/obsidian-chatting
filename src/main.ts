@@ -7,9 +7,11 @@ import {
   TFile,
   type TAbstractFile,
 } from "obsidian";
-import type { ChatSettings, SelectionScope } from "./types";
+import type { ChatSettings, Provider, SelectionScope } from "./types";
 import { DEFAULT_SETTINGS, CHATGPT_OAUTH_DEFAULT_MODEL } from "./types";
-import { ChatSettingTab, getModelDisplayName } from "./settings";
+import { ChatSettingTab, getModelOptions } from "./settings";
+import { migrateLegacyModelSelection, readModelSelectionSeed } from "./model-selection/settings-migration";
+import { ModelSelectionSeedCoordinator } from "./model-selection/seed-coordinator";
 import { ObsidianChatView, VIEW_TYPE_CHAT } from "./ui/chat-view";
 import { SessionSwitcherModal } from "./ui/session-switcher-modal";
 import { AgentLoop } from "./agent/loop";
@@ -56,9 +58,24 @@ export default class ChatPlugin extends Plugin {
    */
   sessionManager!: SessionManager;
 
+  /**
+   * App-wide latest-wins ordering for explicit composer picker choices that
+   * seed `lastSelectedChatModel` (Session Workspaces v4.3, branch 14). A
+   * slow async model-metadata fetch completing late must not roll back a
+   * newer explicit choice; see model-selection/seed-coordinator.ts.
+   */
+  modelSelectionSeedCoordinator!: ModelSelectionSeedCoordinator;
+
   async onload(): Promise<void> {
     await this.migrateLegacyPluginData();
     await this.loadSettings();
+
+    this.modelSelectionSeedCoordinator = new ModelSelectionSeedCoordinator({
+      mutate: async (update) => {
+        const changed = update(this.settings as unknown as Record<string, unknown>);
+        if (changed) await this.saveSettings();
+      },
+    });
 
     // Wire ChatGPT OAuth before constructing the agent: the OAuth API client
     // looks up the service via setChatGPTOAuthService().
@@ -523,14 +540,56 @@ export default class ChatPlugin extends Plugin {
   }
 
   private defaultSessionSeed(): CreateSessionInput {
+    const { provider, model } = this.resolveNewSessionModelSeed();
     return {
       title: "New chat",
-      selectedModel: this.settings.model,
-      upstreamProvider: this.settings.provider,
+      selectedModel: model,
+      upstreamProvider: provider,
       profileId: this.settings.activeProfileId,
       reasoningEffort: this.settings.reasoningEffort,
       webSearch: this.settings.enableWebSearch,
     };
+  }
+
+  /**
+   * New-conversation model resolution (SETTINGS_MIGRATION.md): prefer the
+   * durable `lastSelectedChatModel` seed if its provider is still enabled;
+   * otherwise fall back to the first enabled provider's default model;
+   * otherwise fall back to whatever legacy `settings.provider`/`model` hold
+   * (keeps a completely fresh install functional). This is a SEED only —
+   * once a session exists, its own `SessionMetadata.selectedModel` /
+   * `providerState.upstreamProvider` are authoritative and never re-resolve
+   * through here.
+   */
+  private resolveNewSessionModelSeed(): { provider: Provider; model: string } {
+    const enabled = this.getEnabledProviders();
+    const seed = readModelSelectionSeed(this.settings);
+    if (seed && enabled.includes(seed.providerId)) {
+      return { provider: seed.providerId, model: seed.model };
+    }
+    const fallbackProvider = enabled[0] ?? this.settings.provider;
+    return { provider: fallbackProvider, model: this.defaultModelFor(fallbackProvider) };
+  }
+
+  /** Providers with usable credentials right now: an API key (anthropic/openai) or a live ChatGPT OAuth connection. */
+  getEnabledProviders(): Provider[] {
+    const enabled: Provider[] = [];
+    if (this.loadApiKey("anthropic")) enabled.push("anthropic");
+    if (this.loadApiKey("openai")) enabled.push("openai");
+    if (this.chatgptOAuth?.getCredential()) enabled.push("chatgpt-oauth");
+    return enabled;
+  }
+
+  getProviderLabel(provider: Provider): string {
+    if (provider === "anthropic") return "Anthropic";
+    if (provider === "openai") return "OpenAI";
+    return "ChatGPT OAuth";
+  }
+
+  private defaultModelFor(provider: Provider): string {
+    if (provider === this.settings.provider && this.settings.model) return this.settings.model;
+    if (provider === "chatgpt-oauth") return CHATGPT_OAUTH_DEFAULT_MODEL;
+    return getModelOptions(provider)[0]?.value ?? this.settings.model;
   }
 
   /** Renders a session's transcript to markdown without requiring its runtime to be hydrated. */
@@ -662,6 +721,18 @@ export default class ChatPlugin extends Plugin {
 
     // Load API key for the current provider from SecretStorage
     this.settings.apiKey = this.loadApiKey(this.settings.provider);
+
+    // One-way seed migration (Session Workspaces v4.3, branch 14): copy the
+    // legacy provider+model pair into `lastSelectedChatModel` ONLY when no
+    // seed exists yet. Never overwrites an existing seed, never touches any
+    // existing session's own `SessionMetadata.selectedModel`. Legacy
+    // `settings.provider`/`settings.model` are left in place for rollback
+    // safety but are never read as execution authority again after this.
+    const migration = migrateLegacyModelSelection(this.settings);
+    if (migration.migrated) {
+      this.settings = migration.settings;
+      this.saveData({ ...this.settings, apiKey: "" }).catch(() => {});
+    }
   }
 
   async saveSettings(): Promise<void> {
@@ -672,10 +743,13 @@ export default class ChatPlugin extends Plugin {
     const toSave = { ...this.settings, apiKey: "" };
     await this.saveData(toSave);
 
-    // Update the chat view header with the new model name
-    this.getChatView()?.updateModel(
-      getModelDisplayName(this.settings.provider, this.settings.model)
-    );
+    // NOTE: this used to push `settings.model`'s display name into the chat
+    // header on every settings save. Since Session Workspaces v4.3 (branch
+    // 14), the header reflects each session's own next-turn selection
+    // (ChatView.refreshTurnSelector(), driven by SessionMetadata.selectedModel
+    // / providerState.upstreamProvider), not plugin-global settings — pushing
+    // settings.model here would incorrectly clobber it on an unrelated
+    // settings change (e.g. toggling web search).
   }
 
   /** Load the correct API key when provider changes */
