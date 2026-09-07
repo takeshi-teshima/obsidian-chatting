@@ -11,6 +11,10 @@ import { deriveDisplayHistory } from "../sessions/display-history";
 import type { SessionRuntimeEvent, SessionRuntimeSnapshot } from "../sessions/runtime/types";
 import { SessionSwitcherModal } from "./session-switcher-modal";
 import { observePaneLayout } from "./responsive/pane-layout";
+import { getChattingProviderState } from "../sessions/metadata/types";
+import { buildTurnModelCatalog } from "../turn-execution/catalog";
+import { normalizeProvider, normalizeReasoningEffort, sameTurnExecution } from "../turn-execution/selection";
+import type { TurnExecutionConfig } from "../turn-execution/types";
 
 export const VIEW_TYPE_CHAT = "ochatting-view";
 
@@ -24,6 +28,8 @@ interface ChatContainerProps {
   onReload: () => void;
   onStop: () => void;
   onAttachFiles: (files: File[]) => Promise<void>;
+  onModelChange: (model: string) => void;
+  onReasoningChange: (effort: string) => void;
 }
 
 interface ChatContainerApi extends Record<string, unknown> {
@@ -39,6 +45,13 @@ interface ChatContainerApi extends Record<string, unknown> {
   clearMessages(): void;
   focus(): void;
   setModel(name: string): void;
+  setNextTurnSelection(
+    models: { value: string; label: string }[],
+    selectedModel: string,
+    reasoningEfforts: string[],
+    selectedReasoningEffort: string | undefined,
+    pendingDiffersFromActive: boolean,
+  ): void;
   setSelection(selection: SelectionScope): void;
   getSelection(): SelectionScope | null;
   addContextRef(ref: ContextRef): void;
@@ -73,6 +86,15 @@ export class ObsidianChatView extends ItemView {
   private toolCallIds = new Map<string, number>();
   private askUserActive = false;
   private lastPhase: SessionRuntimeSnapshot["phase"] = "idle";
+  /**
+   * Best-effort UI-local copy of the config admitted for the currently
+   * running/queued turn, captured at the idle->running transition. This is
+   * ONLY used to show the "Next message" badge when the selector has since
+   * been changed; the actual immutable snapshot (the thing that matters for
+   * correctness) lives server-side in SessionManager.run()'s admission logic
+   * and is never read back from here.
+   */
+  private activeTurnSelection: TurnExecutionConfig | null = null;
 
   private sessionBarTitleEl: HTMLElement | undefined;
 
@@ -160,6 +182,9 @@ export class ObsidianChatView extends ItemView {
           onReload: () => void this.handleReload(),
           onStop: () => void this.handleStop(),
           onAttachFiles: (files: File[]) => this.handleAttachFiles(files),
+          onModelChange: (model: string) => void this.handleTurnSelectionChange({ model }),
+          onReasoningChange: (effort: string) =>
+            void this.handleTurnSelectionChange({ reasoningEffort: normalizeReasoningEffort(effort) }),
         },
       },
     );
@@ -342,11 +367,17 @@ export class ObsidianChatView extends ItemView {
         this.lastPhase = event.phase;
         chat.setInputEnabled(event.phase === "idle" || event.phase === "waiting_user");
         if (event.phase === "idle") this.toolCallIds.clear();
+        if (event.phase === "idle") {
+          this.activeTurnSelection = null;
+          if (this.lastKnownSnapshot) this.refreshTurnSelector(this.lastKnownSnapshot);
+        }
         break;
       case "run-complete":
         chat.hideThinking();
         chat.setInputEnabled(true);
         chat.focus();
+        this.activeTurnSelection = null;
+        if (this.lastKnownSnapshot) this.refreshTurnSelector(this.lastKnownSnapshot);
         break;
       case "error":
         chat.hideThinking();
@@ -355,10 +386,64 @@ export class ObsidianChatView extends ItemView {
     }
   }
 
+  /**
+   * Client-side mirror of SessionManager's turn-selection fallback (see
+   * main.ts's getTurnSelectionFallback / turn-execution/selection.ts's
+   * resolveNextTurnExecution). Used only to drive the composer selector's
+   * displayed value; the authoritative admission logic lives server-side.
+   */
+  private resolveDisplaySelection(snapshot: SessionRuntimeSnapshot): TurnExecutionConfig {
+    const state = getChattingProviderState(snapshot.metadata);
+    const provider = normalizeProvider(state.upstreamProvider) ?? this.plugin.settings.provider;
+    const model = snapshot.metadata.selectedModel?.trim() || this.plugin.settings.model;
+    const reasoningEffort = normalizeReasoningEffort(state.reasoningEffort) ?? this.plugin.settings.reasoningEffort;
+    return { provider, model, ...(reasoningEffort ? { reasoningEffort } : {}) };
+  }
+
+  private refreshTurnSelector(snapshot: SessionRuntimeSnapshot): void {
+    const chat = this.chatContainer;
+    if (!chat) return;
+    const pending = this.resolveDisplaySelection(snapshot);
+    const catalog = buildTurnModelCatalog(pending.provider, pending.model);
+    const pendingDiffersFromActive = !!this.activeTurnSelection
+      && !sameTurnExecution(this.activeTurnSelection, pending);
+    chat.setNextTurnSelection(
+      catalog.models,
+      pending.model,
+      catalog.reasoningEfforts,
+      pending.reasoningEffort,
+      pendingDiffersFromActive,
+    );
+    chat.setModel(getModelDisplayName(pending.provider, pending.model));
+  }
+
+  /**
+   * Handles a composer selector change. Always targets the session's
+   * NEXT-turn selection (SessionManager.setNextTurnSelection); intentionally
+   * allowed while a turn is running or queued — see runtime/manager.ts and
+   * SEMANTICS.md invariant 8. Never touches plugin-global settings and never
+   * aborts/restarts the runtime.
+   */
+  private async handleTurnSelectionChange(patch: Partial<TurnExecutionConfig>): Promise<void> {
+    const sessionId = this.boundSessionId;
+    if (!sessionId || !this.lastKnownSnapshot) return;
+    const current = this.resolveDisplaySelection(this.lastKnownSnapshot);
+    const next: TurnExecutionConfig = { ...current, ...patch };
+    try {
+      await this.plugin.sessionManager.setNextTurnSelection(sessionId, next);
+    } catch (e) {
+      new Notice(e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  private lastKnownSnapshot: SessionRuntimeSnapshot | undefined;
+
   private renderSnapshot(snapshot: SessionRuntimeSnapshot): void {
     const chat = this.chatContainer;
     if (!chat) return;
+    this.lastKnownSnapshot = snapshot;
     this.updateSessionBarTitle(snapshot);
+    this.refreshTurnSelector(snapshot);
     chat.clearMessages();
     for (const entry of deriveDisplayHistory(snapshot.messages)) {
       switch (entry.type) {
@@ -472,6 +557,12 @@ export class ObsidianChatView extends ItemView {
     this.toolCallIds.clear();
     chat.addUserMessage(text);
     chat.setInputEnabled(false);
+    // Best-effort local mirror of the admission snapshot SessionManager.run()
+    // is about to capture, purely to drive the "Next message" badge; see
+    // activeTurnSelection's doc comment.
+    if (this.lastKnownSnapshot) {
+      this.activeTurnSelection = this.resolveDisplaySelection(this.lastKnownSnapshot);
+    }
 
     try {
       await this.plugin.sessionManager.runForView(this.viewId, { text, selection, contextRefs });

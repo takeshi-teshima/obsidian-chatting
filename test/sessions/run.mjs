@@ -11,7 +11,12 @@ import * as os from "node:os";
 import * as fs from "node:fs/promises";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const checkFiles = ["migration.check.ts", "concurrency.check.ts"];
+const checkFiles = [
+  "migration.check.ts",
+  "concurrency.check.ts",
+  "turn-model-selection.check.ts",
+  "agent-loop-adapter.check.ts",
+];
 
 let anyFailed = false;
 for (const file of checkFiles) {
