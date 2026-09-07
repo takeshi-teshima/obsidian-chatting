@@ -564,17 +564,27 @@
     display: flex;
     align-items: baseline;
     gap: 8px;
+    /* Long model names/titles must never force the pane wider - shrink and
+       truncate rather than overflow. See responsive-chat-shell notes below. */
+    min-width: 0;
+    flex: 1 1 auto;
+    overflow: hidden;
   }
 
   .ochatting-header-title {
     font-weight: var(--font-weight-bold, 600);
     font-size: var(--font-ui-medium);
     color: var(--text-normal);
+    flex-shrink: 0;
   }
 
   .ochatting-header-model {
     font-size: var(--font-ui-smaller);
     color: var(--text-muted);
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .ochatting-clear-btn {
@@ -929,5 +939,45 @@
       min-width: 36px;
       min-height: 36px;
     }
+  }
+
+  /*
+   * Responsive chat shell (Session Workspaces v4.1, branch 12): keyed off
+   * the actual ChatView pane width via ResizeObserver
+   * (src/ui/responsive/pane-layout.ts sets data-ochatting-pane-layout on
+   * this.contentEl in chat-view.ts's onOpen/onClose), never
+   * window.innerWidth/Platform.isMobile/@media viewport queries - a narrow
+   * desktop sidebar must render identically to a narrow mobile pane.
+   *
+   * The block above (@media max-width:768px) is left as-is: it exists
+   * mainly for the iOS zoom-on-focus font-size fix, which is a genuine
+   * physical-viewport/OS behavior, not a pane-width layout concern, so it
+   * isn't a candidate for migration here. The rules below are additive and
+   * only address the "content must never force the pane wider" acceptance
+   * requirement (long model names, attachment/file names, tool JSON, code)
+   * that @media can't express because it doesn't see the pane's real width
+   * inside a resizable split/sidebar.
+   *
+   * `data-ochatting-pane-layout` lives on an ancestor this component does
+   * not own (ObsidianChatView's contentEl, several DOM levels up from
+   * .ochatting-container), so the ancestor part of each selector must be
+   * :global() - only the .ochatting-* class stays Svelte-scoped.
+   */
+  :global([data-ochatting-pane-layout="compact"]) .ochatting-header {
+    padding: 6px 8px;
+    gap: 0.3em;
+  }
+
+  :global([data-ochatting-pane-layout="compact"]) .ochatting-header-title {
+    display: none; /* "Chat" label is redundant at <=439px; keep only the model name and controls. */
+  }
+
+  :global([data-ochatting-pane-layout="compact"]) .ochatting-clear-btn {
+    font-size: 0.78em;
+    padding: 3px 6px;
+  }
+
+  :global([data-ochatting-pane-layout="wide"]) .ochatting-msg {
+    max-width: 75%; /* On wide panes, full-width bubbles read poorly; narrower measure keeps text scannable. */
   }
 </style>
