@@ -86,6 +86,20 @@ export class AgentLoop {
     this.messages = messages;
   }
 
+  /**
+   * Reset provider continuation state (e.g. OpenAI Responses'
+   * `previous_response_id`, ChatGPT OAuth/Codex replay state) without
+   * touching in-memory message history. Used by the "reload from disk"
+   * recovery path: a migrated or hand-trimmed session must never resume via
+   * a stale/foreign continuation token — the next request must do a full
+   * provider-neutral history bootstrap from the (possibly just-edited)
+   * message list instead.
+   */
+  resetContinuationState(): void {
+    clearOpenAIState();
+    clearChatGPTOAuthState();
+  }
+
   /** Export the full conversation as a readable markdown transcript */
   async exportTranscript(): Promise<string> {
     const skillCatalog = await this.skills.catalogForPrompt();

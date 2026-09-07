@@ -191,6 +191,19 @@ export class ObsidianChatView extends ItemView {
     this.handleClear();
   }
 
+  /** Whether this view's session is currently running a turn. */
+  isRunning(): boolean {
+    return this.running;
+  }
+
+  /** Re-render the chat container from the plugin's current in-memory display history. */
+  rerenderFromPluginState(): void {
+    this.chatContainer?.clearMessages();
+    this.renderHistory();
+    this.chatContainer?.setInputEnabled(true);
+    this.chatContainer?.focus();
+  }
+
   private async handleUserMessage(
     text: string,
     selection: SelectionScope | null,
@@ -285,21 +298,22 @@ export class ObsidianChatView extends ItemView {
   }
 
   /**
-   * Reload persisted chat state from disk without wiping the current
-   * in-memory/visible conversation via a full clear. Useful when
-   * chat-state.json was edited externally (e.g. to trim oversized tool
-   * results that were causing "input exceeds context window" errors)
-   * and the running view/plugin instance needs to pick up that edit
-   * without disabling/re-enabling the plugin or restarting Obsidian.
+   * Reload the active session's `.chatting/sessions/<id>.jsonl` fresh from
+   * disk without wiping the current conversation via a full clear. Useful
+   * when the transcript was hand-edited externally (e.g. to delete a whole
+   * JSONL line carrying an oversized tool result that was causing "input
+   * exceeds context window" errors) and the running view/plugin instance
+   * needs to pick up that edit without disabling/re-enabling the plugin or
+   * restarting Obsidian.
+   *
+   * Refuses (rather than aborting) while this session is mid-turn — an
+   * in-flight run must not have its history swapped out from under it.
    */
   private async handleReload(): Promise<void> {
-    this.plugin.agent.abort();
-    this.running = false;
-    await this.plugin.loadChatHistory();
-    this.chatContainer?.clearMessages();
-    this.renderHistory();
-    this.chatContainer?.setInputEnabled(true);
-    this.chatContainer?.focus();
-    new Notice("Chat reloaded from disk.");
+    if (this.running) {
+      new Notice("Can't reload from disk while a response is in progress. Stop it first.");
+      return;
+    }
+    await this.plugin.reloadActiveSessionFromDisk();
   }
 }

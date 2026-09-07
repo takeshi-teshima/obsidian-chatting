@@ -1,0 +1,37 @@
+{
+  "current": {
+    "id": "s_current",
+    "providerId": "chatting",
+    "title": "Current session",
+    "createdAt": 1000,
+    "lastActivityAt": 2000,
+    "sessionId": "s_current",
+    "selectedModel": "gpt-example",
+    "providerState": {
+      "history": {
+        "format": "unified-message-jsonl",
+        "schemaVersion": 1,
+        "path": ".chatting/sessions/s_current.jsonl"
+      }
+    },
+    "isPinned": true,
+    "isArchived": false
+  },
+  "legacy": {
+    "id": "s_legacy",
+    "title": "Legacy session",
+    "createdAt": 1000,
+    "updatedAt": 1500,
+    "currentNote": "Notes/old.md"
+  },
+  "futureUnknown": {
+    "id": "s_future",
+    "providerId": "chatting",
+    "title": "Future session",
+    "createdAt": 1000,
+    "lastActivityAt": 2000,
+    "futureClaudianField": {
+      "enabled": true
+    }
+  }
+}
