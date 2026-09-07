@@ -27,8 +27,6 @@ interface ChatContainerProps {
   provider: string;
   model: string;
   onSend: (text: string, selection: SelectionScope | null, contextRefs: ContextRef[]) => void;
-  onClear: () => void;
-  onReload: () => void;
   onStop: () => void;
   onAttachFiles: (files: File[]) => Promise<void>;
   /** Claudian-style composer selection (branch 14): always edits the NEXT send. */
@@ -216,8 +214,6 @@ export class ObsidianChatView extends ItemView {
           onSend: (text: string, selection: SelectionScope | null, contextRefs: ContextRef[]) => {
             void this.handleUserMessage(text, selection, contextRefs);
           },
-          onClear: () => void this.handleClear(),
-          onReload: () => void this.handleReload(),
           onStop: () => void this.handleStop(),
           onAttachFiles: (files: File[]) => this.handleAttachFiles(files),
           onModelChange: (providerId: string, model: string) => void this.handleModelChange(providerId, model),
@@ -640,10 +636,6 @@ export class ObsidianChatView extends ItemView {
     this.chatContainer?.setModel(name);
   }
 
-  clearConversation(): void {
-    void this.handleClear();
-  }
-
   /** Whether THIS view's bound session is currently running/queued/stopping a turn. */
   isRunning(): boolean {
     return this.lastPhase !== "idle" && this.lastPhase !== "waiting_user";
@@ -698,50 +690,6 @@ export class ObsidianChatView extends ItemView {
     }
   }
 
-  /**
-   * "Clear" now starts a fresh conversation and switches this leaf to it,
-   * rather than destructively wiping the current session's persisted
-   * history in place. This is a deliberate behavior change under the
-   * multi-session model: sessions are addressable/shareable objects now, so
-   * silently truncating one out from under any other leaf that might be
-   * bound to it (or its browser/index entry) is no longer safe. The old
-   * conversation remains available via "Switch conversation…".
-   */
-  private async handleClear(): Promise<void> {
-    await this.createAndSwitchToNewSession();
-  }
-
-  /**
-   * Reload the bound session's `.chatting/sessions/<id>.jsonl` fresh from
-   * disk (recovery for hand-edited transcripts), scoped to this one session.
-   * Refuses while this session is mid-turn; other sessions are unaffected
-   * either way since SessionManager.reloadFromDisk only touches the runtime
-   * for `sessionId`.
-   */
-  /** Command-palette entry point for the reload-from-disk recovery path. */
-  async reloadFromDiskCommand(): Promise<void> {
-    await this.handleReload();
-  }
-
-  private async handleReload(): Promise<void> {
-    const sessionId = this.boundSessionId;
-    if (!sessionId) return;
-    if (this.plugin.sessionManager.getRuntimePhase(sessionId) !== "idle") {
-      new Notice("Can't reload from disk while a response is in progress. Stop it first.");
-      return;
-    }
-    try {
-      this.runtimeUnsubscribe?.();
-      const snapshot = await this.plugin.sessionManager.reloadFromDisk(sessionId);
-      this.runtimeUnsubscribe = await this.plugin.sessionManager.subscribeView(this.viewId, (event) => this.handleRuntimeEvent(event));
-      this.renderSnapshot(snapshot);
-      this.chatContainer?.setInputEnabled(true);
-      this.chatContainer?.focus();
-      new Notice("Conversation reloaded from disk.");
-    } catch (error) {
-      new Notice(`Reload from disk failed: ${error instanceof Error ? error.message : String(error)}`);
-    }
-  }
 }
 
 function isChatViewState(value: unknown): value is ChatViewState {

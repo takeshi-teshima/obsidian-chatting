@@ -34,6 +34,19 @@ export interface SessionManagerOptions {
   /** Recommended: 6-10 hydrated idle runtimes. */
   maxHydratedRuntimes?: number;
   onBackgroundCompletion?: (sessionId: string, outcome: SessionRunOutcome) => void;
+  /**
+   * Fired after an automatic reload-on-open attempt (see
+   * `ensureRuntimeForOpen`, used by `bindView`/`switchView` when re-attaching
+   * to an already-hydrated, idle session — the automatic replacement for the
+   * old manual "Reload from disk" button). `{ changed }` reports whether the
+   * reloaded message count actually differs from what was in memory, so
+   * callers can choose to notify the user only on a genuine external edit
+   * rather than on every routine session switch. `{ error }` reports that the
+   * reload attempt itself failed (e.g. corrupt/missing file); this should
+   * always surface to the user since it can otherwise leave them looking at
+   * silently stale state.
+   */
+  onAutoReload?: (sessionId: string, result: { changed: boolean } | { error: unknown }) => void;
 }
 
 interface QueuedRun {
@@ -60,6 +73,7 @@ export class SessionManager {
   private readonly maxConcurrentRuns: number;
   private readonly maxHydratedRuntimes: number;
   private readonly onBackgroundCompletion?: SessionManagerOptions["onBackgroundCompletion"];
+  private readonly onAutoReload?: SessionManagerOptions["onAutoReload"];
 
   private readonly runtimes = new Map<string, SessionRuntime>();
   private readonly runtimeUnsubscribers = new Map<string, () => void>();
@@ -77,6 +91,7 @@ export class SessionManager {
     this.maxConcurrentRuns = clamp(options.maxConcurrentRuns ?? 3, 1, 6);
     this.maxHydratedRuntimes = clamp(options.maxHydratedRuntimes ?? 8, 2, 24);
     this.onBackgroundCompletion = options.onBackgroundCompletion;
+    this.onAutoReload = options.onAutoReload;
   }
 
   subscribe(listener: (event: SessionManagerEvent) => void): () => void {
@@ -131,7 +146,7 @@ export class SessionManager {
     }
     this.viewBindings.set(viewId, sessionId);
     this.visibleViews.add(viewId);
-    const runtime = await this.ensureRuntime(sessionId);
+    const runtime = await this.ensureRuntimeForOpen(sessionId);
     await runtime.markRead();
     this.emit({ type: "view-binding", viewId, sessionId });
     return runtime.snapshot();
@@ -140,7 +155,7 @@ export class SessionManager {
   async switchView(viewId: string, sessionId: string): Promise<SessionRuntimeSnapshot> {
     if (!(await this.store.getMeta(sessionId))) throw new Error(`Session not found: ${sessionId}`);
     this.viewBindings.set(viewId, sessionId);
-    const runtime = await this.ensureRuntime(sessionId);
+    const runtime = await this.ensureRuntimeForOpen(sessionId);
     await runtime.markRead();
     this.emit({ type: "view-binding", viewId, sessionId });
     await this.evictIdleRuntimes();
@@ -373,6 +388,49 @@ export class SessionManager {
     this.runtimes.set(sessionId, runtime);
     this.runtimeUnsubscribers.set(sessionId, unsubscribe);
     await this.evictIdleRuntimes();
+    return runtime;
+  }
+
+  /**
+   * `bindView`/`switchView`-only entry point: transparently reloads an
+   * already-hydrated, idle session's history fresh from disk before handing
+   * it back — the automatic replacement for the old manual "Reload from
+   * disk" button, now triggered by opening/switching to a session instead of
+   * a click. Deliberately checks `this.runtimes.has(sessionId)` directly
+   * (rather than changing `ensureRuntime`'s signature/other call sites, e.g.
+   * `run()`'s turn admission or `subscribeView`) so this stays scoped to the
+   * two "opening a session" call sites and can't accidentally trigger a
+   * reload from an unrelated internal path.
+   *
+   * - Not yet hydrated this Obsidian session: delegates straight to
+   *   `ensureRuntime`, whose `store.load()` is already a fresh disk read, so
+   *   no second read is performed.
+   * - Hydrated but BUSY (mid-turn): returns the live runtime unreloaded —
+   *   never corrupts an in-progress turn.
+   * - Hydrated and idle: reloads via the existing `reloadFromDisk` recovery
+   *   primitive. On success, reports whether the message count actually
+   *   changed via `onAutoReload`. On failure (e.g. corrupt/missing file),
+   *   `reloadFromDisk` has already discarded the old runtime, so this falls
+   *   back to a fresh `ensureRuntime` attempt (retrying the disk read) and
+   *   reports the error via `onAutoReload` so it isn't silently swallowed.
+   */
+  private async ensureRuntimeForOpen(sessionId: string): Promise<SessionRuntime> {
+    const wasHydrated = this.runtimes.has(sessionId);
+    if (!wasHydrated) return this.ensureRuntime(sessionId);
+
+    const existing = this.runtimes.get(sessionId)!;
+    if (existing.isBusy) return existing;
+
+    const beforeCount = existing.snapshot().messages.length;
+    try {
+      await this.reloadFromDisk(sessionId);
+    } catch (error) {
+      this.onAutoReload?.(sessionId, { error });
+      return this.ensureRuntime(sessionId);
+    }
+    const runtime = this.runtimes.get(sessionId)!;
+    const afterCount = runtime.snapshot().messages.length;
+    this.onAutoReload?.(sessionId, { changed: afterCount !== beforeCount });
     return runtime;
   }
 

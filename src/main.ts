@@ -108,6 +108,19 @@ export default class ChatPlugin extends Plugin {
       onBackgroundCompletion: (sessionId, outcome) => {
         if (outcome === "error") new Notice(`A background conversation hit an error (${sessionId.slice(0, 12)}…).`);
       },
+      // Automatic reload-on-open (replaces the old manual "Reload from disk"
+      // button): stay silent on routine session switches, only speak up when
+      // the reload actually changed something (genuine external edit) or
+      // failed outright (must not leave the user looking at silently stale
+      // or broken state).
+      onAutoReload: (sessionId, result) => {
+        if ("error" in result) {
+          const msg = result.error instanceof Error ? result.error.message : String(result.error);
+          new Notice(`Couldn't reload a conversation from disk (${sessionId.slice(0, 12)}…): ${msg}`);
+        } else if (result.changed) {
+          new Notice("Conversation updated from disk.");
+        }
+      },
     });
 
     // Runs v3/branch-11/legacy migration into `.chatting/` canonical storage
@@ -152,22 +165,6 @@ export default class ChatPlugin extends Plugin {
       id: "copy-transcript",
       name: "Copy conversation transcript to clipboard",
       callback: () => this.shareTranscript(),
-    });
-
-    this.addCommand({
-      id: "clear-chat",
-      name: "Clear conversation",
-      callback: () => this.clearChat(),
-    });
-
-    this.addCommand({
-      id: "reload-conversation-from-disk",
-      name: "Reload conversation from disk (recovery)",
-      callback: () => {
-        const view = this.getChatView();
-        if (!view) { new Notice("No active conversation."); return; }
-        void view.reloadFromDiskCommand();
-      },
     });
 
     // ─── Session Workspaces v4.1: multi-session commands ─────────────────
@@ -427,16 +424,6 @@ export default class ChatPlugin extends Plugin {
     }).catch(() => {
       new Notice("Failed to copy transcript.");
     });
-  }
-
-  private clearChat(): void {
-    const view = this.getChatView();
-    if (view) {
-      view.clearConversation();
-      new Notice("Conversation cleared.");
-    } else {
-      new Notice("No active conversation.");
-    }
   }
 
   // ─── Session Workspaces v4.1 multi-session runtime ─────────────────────

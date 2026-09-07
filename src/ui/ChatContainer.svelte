@@ -25,8 +25,6 @@
     provider: string;
     model: string;
     onSend: (text: string, selection: SelectionScope | null, contextRefs: ContextRef[]) => void;
-    onClear: () => void;
-    onReload: () => void;
     onStop: () => void;
     /** Copies device/pasted image files into the vault and reports back ContextRefs + per-file errors. */
     onAttachFiles: (files: File[]) => Promise<void>;
@@ -46,8 +44,6 @@
     provider,
     model,
     onSend,
-    onClear,
-    onReload,
     onStop,
     onAttachFiles,
     onModelChange,
@@ -415,8 +411,6 @@
       <span class="ochatting-header-title">Chat</span>
       <span class="ochatting-header-model">{displayModel || "No model"}</span>
     </div>
-    <button class="ochatting-clear-btn" onclick={onClear}>Clear</button>
-    <button class="ochatting-clear-btn ochatting-reload-btn" onclick={onReload}>Reload</button>
   </div>
 
   <!-- Messages -->
@@ -670,25 +664,6 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-  }
-
-  .ochatting-clear-btn {
-    font-size: var(--font-ui-smaller);
-    color: var(--text-muted);
-    background: none;
-    border: none;
-    cursor: pointer;
-    padding: 4px 8px;
-    border-radius: var(--radius-s);
-  }
-
-  .ochatting-clear-btn:hover {
-    background: var(--background-modifier-hover);
-    color: var(--text-normal);
-  }
-
-  .ochatting-reload-btn {
-    color: var(--text-accent);
   }
 
   /* ─── Messages ──────────────────────────────────────────────────────── */
@@ -1078,11 +1053,6 @@
 
   :global([data-ochatting-pane-layout="compact"]) .ochatting-header-title {
     display: none; /* "Chat" label is redundant at <=439px; keep only the model name and controls. */
-  }
-
-  :global([data-ochatting-pane-layout="compact"]) .ochatting-clear-btn {
-    font-size: 0.78em;
-    padding: 3px 6px;
   }
 
   :global([data-ochatting-pane-layout="wide"]) .ochatting-msg {
