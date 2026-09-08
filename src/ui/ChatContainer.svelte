@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { onMount } from "svelte";
   import type { App, Component as ObsidianComponent } from "obsidian";
   import { MarkdownRenderer } from "obsidian";
   import type { ToolResult, SelectionScope } from "../types";
@@ -42,7 +43,7 @@
      * `true`: plain Enter sends, Shift+Enter inserts a newline (the
      * plugin's original hardcoded behavior). `false` (default): plain
      * Enter inserts a newline and Cmd/Ctrl+Enter sends instead. See
-     * `handleKeydown` below.
+     * `handleGlobalKeydownCapture` below.
      */
     sendOnEnter: boolean;
   }
@@ -344,25 +345,38 @@
    *   like a normal text box; Cmd+Enter (macOS) / Ctrl+Enter
    *   (Windows/Linux) sends instead. `metaKey || ctrlKey` is checked
    *   rather than branching on OS, matching the common cross-platform
-   *   "mod+Enter" convention (e.g. Slack, GitHub) — no OS-detection
-   *   convention exists elsewhere in this codebase to reuse (the
-   *   responsive-layout code deliberately avoids Platform checks; see
-   *   src/ui/responsive/pane-layout.ts), and either modifier is safe to
-   *   accept on any platform since browsers/Electron don't assign Enter a
-   *   conflicting native meaning with these modifiers held.
+   *   "mod+Enter" convention (e.g. Slack, GitHub).
+   *
+   * IMPORTANT (fixes a real Mac bug): this must NOT be wired up as a plain
+   * bubble-phase `onkeydown` on the textarea. Obsidian ships a built-in
+   * default hotkey, "Open link under cursor (in new tab)", bound to
+   * Mod+Enter (Cmd+Enter on macOS, Ctrl+Enter elsewhere) — see
+   * https://forum.obsidian.md/t/ctrl-enter-doesnt-work-in-new-version/47137
+   * and the official hotkeys docs. Obsidian's global Keymap listens for
+   * this on `document` in the CAPTURE phase, so a bubble-phase listener on
+   * our textarea never even sees the event: Obsidian's handler already
+   * matched Mod+Enter, ran (or swallowed) its own command, and stopped
+   * propagation before our element's turn in the capture→target→bubble
+   * flow. On macOS this meant only Cmd+Ctrl+Enter (a combo Obsidian
+   * doesn't bind) ever reached us. Attaching our own capture-phase
+   * listener on `window` — which fires strictly before `document`'s
+   * capture-phase listener in the DOM event flow — lets us claim the
+   * event first via `stopImmediatePropagation()` whenever our composer
+   * textarea is actually focused, without needing to know or guess which
+   * exact combo Obsidian (or any other plugin) has bound.
    */
-  function handleKeydown(e: KeyboardEvent): void {
-    if (sendOnEnter) {
-      if (e.key === "Enter" && !e.shiftKey) {
-        e.preventDefault();
-        void handleSend();
-      }
-      return;
-    }
-    if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
-      e.preventDefault();
-      void handleSend();
-    }
+  function isSendCombo(e: KeyboardEvent): boolean {
+    if (e.key !== "Enter") return false;
+    return sendOnEnter ? !e.shiftKey : e.metaKey || e.ctrlKey;
+  }
+
+  function handleGlobalKeydownCapture(e: KeyboardEvent): void {
+    if (!textareaEl || document.activeElement !== textareaEl) return;
+    if (!isSendCombo(e)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    e.stopImmediatePropagation();
+    void handleSend();
   }
 
   function handleAttachClick(): void {
@@ -436,6 +450,19 @@
     if (str.length <= max) return str;
     return str.substring(0, max) + "\n... (truncated)";
   }
+
+  // See the big comment on handleGlobalKeydownCapture above: this must be a
+  // capture-phase listener on `window` (not a bubble-phase `onkeydown` on
+  // the textarea) so it wins the race against Obsidian's own document-level
+  // capture-phase hotkey dispatch (e.g. the built-in Mod+Enter "Open link
+  // under cursor" command), which otherwise swallows Cmd+Enter on macOS
+  // before it ever reaches this component.
+  onMount(() => {
+    window.addEventListener("keydown", handleGlobalKeydownCapture, true);
+    return () => {
+      window.removeEventListener("keydown", handleGlobalKeydownCapture, true);
+    };
+  });
 </script>
 
 <div class="ochatting-container">
@@ -630,7 +657,6 @@
       {placeholder}
       disabled={!inputEnabled}
       rows="1"
-      onkeydown={handleKeydown}
       oninput={autoGrow}
       onpaste={(event) => void handlePaste(event)}
     ></textarea>
