@@ -191,6 +191,23 @@ export class ObsidianChatView extends ItemView {
     this.handleClear();
   }
 
+  /**
+   * Repaint this view for a newly-applied session (new/switch/delete/reload).
+   * `plugin.chatHistory` and `plugin.agent` have already been replaced by
+   * `ChatPlugin.applySessionToRuntime()` before this is called; this method
+   * only clears/replays the UI and resets local view state.
+   */
+  reloadSession(): void {
+    this.running = false;
+    this.chatContainer?.clearMessages();
+    this.renderHistory();
+    this.chatContainer?.setModel(
+      getModelDisplayName(this.plugin.settings.provider, this.plugin.settings.model)
+    );
+    this.chatContainer?.setInputEnabled(true);
+    this.chatContainer?.focus();
+  }
+
   private async handleUserMessage(
     text: string,
     selection: SelectionScope | null,
@@ -256,8 +273,8 @@ export class ObsidianChatView extends ItemView {
       this.running = false;
       chat.setInputEnabled(true);
       chat.focus();
-      // Persist after each turn
-      void this.plugin.saveChatHistory();
+      // Persist after each completed/failed turn
+      void this.plugin.saveActiveSession();
     }
   }
 
@@ -270,7 +287,7 @@ export class ObsidianChatView extends ItemView {
       chat.setInputEnabled(true);
       chat.focus();
     }
-    void this.plugin.saveChatHistory();
+    void this.plugin.saveActiveSession();
   }
 
   private handleClear(): void {
@@ -280,26 +297,21 @@ export class ObsidianChatView extends ItemView {
     this.chatContainer?.clearMessages();
     this.running = false;
     this.chatContainer?.setInputEnabled(true);
-    // Clear persisted state
-    void this.plugin.saveChatHistory();
+    // Persist the now-empty active session
+    void this.plugin.saveActiveSession();
   }
 
   /**
-   * Reload persisted chat state from disk without wiping the current
-   * in-memory/visible conversation via a full clear. Useful when
-   * chat-state.json was edited externally (e.g. to trim oversized tool
+   * Reload the active session from disk without wiping the current
+   * in-memory/visible conversation via a full clear. Useful when the
+   * session file was edited externally (e.g. to trim oversized tool
    * results that were causing "input exceeds context window" errors)
    * and the running view/plugin instance needs to pick up that edit
    * without disabling/re-enabling the plugin or restarting Obsidian.
    */
   private async handleReload(): Promise<void> {
-    this.plugin.agent.abort();
     this.running = false;
-    await this.plugin.loadChatHistory();
-    this.chatContainer?.clearMessages();
-    this.renderHistory();
-    this.chatContainer?.setInputEnabled(true);
-    this.chatContainer?.focus();
+    await this.plugin.reloadActiveSessionFromDisk();
     new Notice("Chat reloaded from disk.");
   }
 }

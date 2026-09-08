@@ -32,7 +32,7 @@ import {
 } from "../auth/chatgptOAuth";
 import { resolveReasoningConfig } from "../model/reasoning";
 import type { ProviderRequestContext } from "./vision";
-import { buildResponsesVisionContent } from "./vision";
+import { buildResponsesHistoryInput } from "./responses-history";
 
 const CODEX_RESPONSES_URL = "https://chatgpt.com/backend-api/codex/responses";
 
@@ -123,7 +123,7 @@ export async function sendChatGPTOAuthMessage(
     model,
     // Replay the full conversation each turn — Codex's `store:false` mode
     // makes server-side `previous_response_id` chaining unavailable.
-    input: await buildFullHistoryInput(messages, requestContext?.images),
+    input: await buildResponsesHistoryInput(messages, requestContext?.images),
     instructions: systemPrompt,
     // Required by the Codex backend; omitting it returns
     // 400 {"detail":"Store must be set to false"}.
@@ -365,63 +365,6 @@ function parseSSE(text: string): Array<Record<string, unknown>> {
     }
   }
   return events;
-}
-
-// ─── Input building ─────────────────────────────────────────────────────────
-
-/**
- * Convert the agent loop's full message history into Responses-API input
- * items. The Codex backend rejects `previous_response_id` (because we must
- * send `store:false`), so every request carries the entire conversation.
- *
- * Encoding rules:
- *   - string content        → { type:"message", role, content }
- *   - text block            → { type:"message", role, content:text }
- *   - tool_use block        → { type:"function_call", call_id, name, arguments }
- *   - tool_result block     → { type:"function_call_output", call_id, output }
- *
- * The system prompt is sent separately via the `instructions` field, so we
- * never include it here.
- */
-async function buildFullHistoryInput(
-  messages: UnifiedMessage[],
-  resolver?: ProviderRequestContext["images"],
-): Promise<Array<Record<string, unknown>>> {
-  const items: Array<Record<string, unknown>> = [];
-
-  for (const msg of messages) {
-    const role = msg.role === "assistant" ? "assistant" : "user";
-
-    if (typeof msg.content === "string") {
-      // `store:false` means this backend requires the full history replayed
-      // on every turn, so historical image ContextRefs are intentionally
-      // re-resolved (re-read + re-encoded) here on every subsequent request.
-      const visionContent = await buildResponsesVisionContent(msg, resolver);
-      items.push({ type: "message", role, content: visionContent ?? msg.content });
-      continue;
-    }
-
-    for (const block of msg.content) {
-      if (block.type === "text" && block.text) {
-        items.push({ type: "message", role, content: block.text });
-      } else if (block.type === "tool_use" && block.name && block.id) {
-        items.push({
-          type: "function_call",
-          call_id: block.id,
-          name: block.name,
-          arguments: JSON.stringify(block.input ?? {}),
-        });
-      } else if (block.type === "tool_result" && block.tool_use_id) {
-        items.push({
-          type: "function_call_output",
-          call_id: block.tool_use_id,
-          output: block.content ?? "",
-        });
-      }
-    }
-  }
-
-  return items;
 }
 
 // ─── Response parsing (mirrors openai.ts) ───────────────────────────────────

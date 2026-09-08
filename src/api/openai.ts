@@ -9,6 +9,7 @@ import type {
 import { resolveReasoningConfig } from "../model/reasoning";
 import type { ProviderRequestContext } from "./vision";
 import { buildResponsesVisionContent } from "./vision";
+import { buildResponsesHistoryInput } from "./responses-history";
 
 const DEFAULT_OPENAI_URL = "https://api.openai.com";
 
@@ -118,11 +119,21 @@ export async function sendOpenAIMessage(
 // ─── Input Building ─────────────────────────────────────────────────────────
 
 /**
- * Builds input items for the current turn only.
- * When using previous_response_id, we only need to send:
- * - On first call: system message + user message
- * - On tool result calls: function_call_output items
- * - On follow-up user messages: user message
+ * Builds input items for the current turn.
+ *
+ * When there is no `previous_response_id` — the first turn of a fresh
+ * conversation, but also the first turn after a session switch/restart,
+ * since a process-local response id can never be safely reused across
+ * those boundaries — we cannot rely on OpenAI's server-side state at all.
+ * In that case we reconstruct the *full* provider-neutral history
+ * (assistant text, function calls, function outputs, and historical image
+ * ContextRefs) via `buildResponsesHistoryInput`, not just a text-only
+ * replay, so restored tool call/result pairs and image attachments stay
+ * coherent.
+ *
+ * When a live `previous_response_id` exists, the existing optimized
+ * behavior is unchanged: only the latest turn's new input/tool output is
+ * sent, and OpenAI continues the conversation server-side.
  */
 async function buildCurrentTurnInput(
   messages: UnifiedMessage[],
@@ -131,7 +142,8 @@ async function buildCurrentTurnInput(
 ): Promise<Record<string, unknown>[]> {
   const items: Record<string, unknown>[] = [];
 
-  // If no previous response (first call), include all messages
+  // If no previous response (first call, or first call after a session
+  // switch/restart cleared previousResponseId), reconstruct full history.
   if (!previousResponseId) {
     items.push({
       type: "message",
@@ -139,16 +151,8 @@ async function buildCurrentTurnInput(
       content: systemPrompt,
     });
 
-    for (const msg of messages) {
-      if (typeof msg.content === "string") {
-        const visionContent = await buildResponsesVisionContent(msg, resolver);
-        items.push({
-          type: "message",
-          role: msg.role === "assistant" ? "assistant" : "user",
-          content: visionContent ?? msg.content,
-        });
-      }
-    }
+    const history = await buildResponsesHistoryInput(messages, resolver);
+    items.push(...history);
     return items;
   }
 
