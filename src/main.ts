@@ -120,13 +120,26 @@ export default class ChatPlugin extends Plugin {
     // File explorer context menu
     this.registerEvent(
       this.app.workspace.on("file-menu", (menu: Menu, file: TAbstractFile) => {
-        if (!(file instanceof TFile) || file.extension !== "md") return;
-        menu.addItem((item) =>
-          item
-            .setTitle("Chat about this note")
-            .setIcon("message-circle")
-            .onClick(() => void this.openChatWithMessage(`Tell me about ${file.path}`))
-        );
+        if (!(file instanceof TFile)) return;
+        if (file.extension === "md") {
+          menu.addItem((item) =>
+            item
+              .setTitle("Chat about this note")
+              .setIcon("message-circle")
+              .onClick(() => void this.openChatWithMessage(`Tell me about ${file.path}`))
+          );
+        } else if (file.extension.toLowerCase() === "pdf") {
+          menu.addItem((item) =>
+            item
+              .setTitle("Chat about this PDF")
+              .setIcon("file-search")
+              .onClick(() =>
+                void this.openChatWithMessage(
+                  `Inspect ${file.path} using the local PDF tools. Start with pdf_info or pdf_search; read only the pages needed for my question.`
+                )
+              )
+          );
+        }
       })
     );
 
