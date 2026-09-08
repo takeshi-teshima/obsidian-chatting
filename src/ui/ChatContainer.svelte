@@ -36,6 +36,15 @@
      */
     onModelChange: (providerId: string, model: string) => void;
     onReasoningChange: (effort: string) => void;
+    /**
+     * `plugin.settings.sendOnEnter` (Settings → "Send on Enter"), mirroring
+     * how `provider`/`model` above are threaded in from plugin settings.
+     * `true`: plain Enter sends, Shift+Enter inserts a newline (the
+     * plugin's original hardcoded behavior). `false` (default): plain
+     * Enter inserts a newline and Cmd/Ctrl+Enter sends instead. See
+     * `handleKeydown` below.
+     */
+    sendOnEnter: boolean;
   }
 
   let {
@@ -48,6 +57,7 @@
     onAttachFiles,
     onModelChange,
     onReasoningChange,
+    sendOnEnter,
   }: Props = $props();
 
   // Turn-level selector state, updated exclusively via setNextTurnSelection()
@@ -324,8 +334,32 @@
     onSend(text, currentSelection, refs);
   }
 
+  /**
+   * Enter/send keybinding, gated by the `sendOnEnter` setting (default
+   * `false` = newline-on-Enter):
+   * - `sendOnEnter === true`: plain Enter sends, Shift+Enter inserts a
+   *   newline. This is the plugin's original hardcoded behavior.
+   * - `sendOnEnter === false` (default): plain Enter is left untouched
+   *   (no `preventDefault()`) so the textarea inserts a newline exactly
+   *   like a normal text box; Cmd+Enter (macOS) / Ctrl+Enter
+   *   (Windows/Linux) sends instead. `metaKey || ctrlKey` is checked
+   *   rather than branching on OS, matching the common cross-platform
+   *   "mod+Enter" convention (e.g. Slack, GitHub) — no OS-detection
+   *   convention exists elsewhere in this codebase to reuse (the
+   *   responsive-layout code deliberately avoids Platform checks; see
+   *   src/ui/responsive/pane-layout.ts), and either modifier is safe to
+   *   accept on any platform since browsers/Electron don't assign Enter a
+   *   conflicting native meaning with these modifiers held.
+   */
   function handleKeydown(e: KeyboardEvent): void {
-    if (e.key === "Enter" && !e.shiftKey) {
+    if (sendOnEnter) {
+      if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        void handleSend();
+      }
+      return;
+    }
+    if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
       e.preventDefault();
       void handleSend();
     }

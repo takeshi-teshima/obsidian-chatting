@@ -32,6 +32,8 @@ interface ChatContainerProps {
   /** Claudian-style composer selection (branch 14): always edits the NEXT send. */
   onModelChange: (providerId: string, model: string) => void;
   onReasoningChange: (effort: string) => void;
+  /** `plugin.settings.sendOnEnter` (Settings → "Send on Enter"); see ChatContainer.svelte's `handleKeydown`. */
+  sendOnEnter: boolean;
 }
 
 interface ChatContainerApi extends Record<string, unknown> {
@@ -218,6 +220,7 @@ export class ObsidianChatView extends ItemView {
           onAttachFiles: (files: File[]) => this.handleAttachFiles(files),
           onModelChange: (providerId: string, model: string) => void this.handleModelChange(providerId, model),
           onReasoningChange: (effort: string) => void this.handleReasoningChange(effort),
+          sendOnEnter: this.plugin.settings.sendOnEnter,
         },
       },
     );

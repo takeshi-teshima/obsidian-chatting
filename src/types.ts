@@ -50,6 +50,14 @@ export interface ChatSettings {
    * devices, unlike the old in-memory-only cache it replaces.
    */
   customModelCatalog?: Partial<Record<Provider, ModelCatalogEntry[]>>;
+  /**
+   * Composer keybinding: when `true`, plain Enter sends the message (and
+   * Shift+Enter inserts a newline) — this is the plugin's original
+   * hardcoded behavior. When `false` (the default), plain Enter inserts a
+   * newline like a normal textarea, and Cmd/Ctrl+Enter sends instead. See
+   * `handleKeydown` in src/ui/ChatContainer.svelte.
+   */
+  sendOnEnter: boolean;
 }
 
 /** A single model catalog entry: id + display label. Kept minimal and JSON-safe for persistence. */
@@ -67,6 +75,7 @@ export const DEFAULT_SETTINGS: ChatSettings = {
   reasoningEffort: "auto",
   customInstructions: "",
   activeProfileId: null,
+  sendOnEnter: false,
 };
 
 /**
