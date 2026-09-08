@@ -18,6 +18,7 @@ const checkFiles = [
   "turn-model-selection.check.ts",
   "agent-loop-adapter.check.ts",
   "model-selection.check.ts",
+  "model-catalog-persistence.check.ts",
 ];
 
 let anyFailed = false;

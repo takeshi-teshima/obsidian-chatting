@@ -4,55 +4,22 @@ import type { Provider, ChatSettings } from "./types";
 import { CHATGPT_OAUTH_DEFAULT_MODEL } from "./types";
 import type { ChatGPTDeviceAuthorization, PollHandle } from "./auth/chatgptOAuth";
 import { PromptProfileService } from "./profiles/service";
+import {
+  FALLBACK_MODELS,
+  getModelDisplayName,
+  getModelOptions,
+  setSettingsSource,
+  writeCustomCatalog,
+  type ModelOption,
+} from "./model-catalog";
 
-interface ModelOption {
-  value: string;
-  label: string;
-}
-
-const FALLBACK_MODELS: Record<string, ModelOption[]> = {
-  anthropic: [
-    { value: "claude-sonnet-4-6", label: "Claude Sonnet 4.6" },
-    { value: "claude-opus-4-7", label: "Claude Opus 4.7" },
-    { value: "claude-haiku-4-5-20251001", label: "Claude Haiku 4.5" },
-  ],
-  openai: [
-    { value: "gpt-5.3-codex", label: "Codex 5.3" },
-    { value: "gpt-5.4", label: "GPT-5.4" },
-    { value: "gpt-4o", label: "GPT-4o" },
-  ],
-  // Mirrors the bundled `models.json` shipped with the official OpenAI Codex
-  // CLI. These are the slugs the Codex backend currently accepts when the
-  // request is authenticated with a ChatGPT account. Sorted by Codex CLI
-  // priority (lowest first = recommended). Update when upstream changes.
-  "chatgpt-oauth": [
-    { value: "gpt-5.5", label: "GPT-5.5 (recommended)" },
-    { value: "gpt-5.4", label: "GPT-5.4" },
-    { value: "gpt-5.4-mini", label: "GPT-5.4-Mini" },
-    { value: "gpt-5.3-codex", label: "GPT-5.3-Codex" },
-    { value: "gpt-5.2", label: "GPT-5.2" },
-  ],
-};
-
-// Cache fetched models per provider so they survive tab re-opens
-const modelCache = new Map<string, ModelOption[]>();
-
-/** Resolve a model ID to its display name */
-export function getModelDisplayName(provider: string, modelId: string): string {
-  const models = getModelOptions(provider);
-  const match = models.find((m) => m.value === modelId);
-  return match?.label || modelId;
-}
-
-/**
- * Current known model list for a provider: whatever was last fetched from
- * the provider (cached for this session) or the bundled fallback list.
- * Reused by the turn-level model selector (src/turn-execution/catalog.ts)
- * so there is exactly one catalog, not a competing one.
- */
-export function getModelOptions(provider: string): ModelOption[] {
-  return modelCache.get(provider) || FALLBACK_MODELS[provider] || [];
-}
+// Re-exported so existing call sites (src/main.ts, src/ui/chat-view.ts,
+// src/turn-execution/catalog.ts) that `import { getModelOptions, ... } from
+// "./settings"` keep working unchanged — the actual implementation now
+// lives in src/model-catalog.ts (kept free of "obsidian" imports so it, and
+// the persistence it backs, can be exercised by a plain-Node regression
+// check without pulling in Obsidian runtime stubs).
+export { getModelDisplayName, getModelOptions, setSettingsSource };
 
 // ─── Settings Tab ───────────────────────────────────────────────────────────
 
@@ -365,13 +332,13 @@ export class ChatSettingTab extends PluginSettingTab {
    */
   private renderModelSection(containerEl: HTMLElement): void {
     const s = this.plugin.settings;
-    const cached = modelCache.get(s.provider);
+    const custom = s.customModelCatalog?.[s.provider];
 
     const catalogSetting = new Setting(containerEl)
       .setName("Model catalog")
       .setDesc(
-        cached
-          ? `${cached.length} models available for ${s.provider} in the composer's model picker.`
+        custom && custom.length > 0
+          ? `${custom.length} models available for ${s.provider} in the composer's model picker (persisted, syncs across devices).`
           : "Using the bundled default list. Fetch to refresh from the provider's API, or add a custom model ID below."
       );
 
@@ -395,7 +362,7 @@ export class ChatSettingTab extends PluginSettingTab {
             btn.setDisabled(true);
             try {
               const fetched = await fetchModelsFromAPI(s.provider, s.apiKey);
-              modelCache.set(s.provider, fetched);
+              await writeCustomCatalog(this.plugin, s.provider, fetched);
               new Notice(`Loaded ${fetched.length} models. Pick one in the composer's model selector.`);
               this.display();
             } catch (e) {
@@ -424,18 +391,53 @@ export class ChatSettingTab extends PluginSettingTab {
           .onChange((value) => { customModelId = value.trim(); })
       )
       .addButton((btn) =>
-        btn.setButtonText("Add").onClick(() => {
+        btn.setButtonText("Add").onClick(async () => {
           if (!customModelId) return;
-          const existing = modelCache.get(s.provider) || [...(FALLBACK_MODELS[s.provider] ?? [])];
+          const existing = s.customModelCatalog?.[s.provider] ?? [...(FALLBACK_MODELS[s.provider] ?? [])];
           if (!existing.some((m) => m.value === customModelId)) {
-            existing.push({ value: customModelId, label: customModelId });
-            modelCache.set(s.provider, existing);
+            await writeCustomCatalog(this.plugin, s.provider, [
+              ...existing,
+              { value: customModelId, label: customModelId },
+            ]);
           }
           new Notice(`Added ${customModelId} to ${s.provider}'s catalog.`);
           customModelId = "";
           this.display();
         })
       );
+
+    // ─── Catalog list: bundled fallback + persisted custom/fetched entries,
+    // de-duplicated by value. Only persisted entries (the ones the user
+    // fetched or typed in) are deletable — the bundled list isn't user data.
+    const persisted = s.customModelCatalog?.[s.provider] ?? [];
+    const persistedValues = new Set(persisted.map((m) => m.value));
+    const merged: ModelOption[] = [...persisted];
+    for (const fallback of FALLBACK_MODELS[s.provider] ?? []) {
+      if (!persistedValues.has(fallback.value)) merged.push(fallback);
+    }
+
+    if (merged.length > 0) {
+      const listContainer = containerEl.createDiv({ cls: "ochatting-model-catalog-list" });
+      for (const model of merged) {
+        const deletable = persistedValues.has(model.value);
+        const row = new Setting(listContainer)
+          .setName(model.label)
+          .setDesc(deletable ? `${model.value} (custom/fetched)` : `${model.value} (bundled default)`);
+        if (deletable) {
+          row.addButton((btn) =>
+            btn
+              .setIcon("trash-2")
+              .setTooltip(`Remove ${model.value}`)
+              .onClick(async () => {
+                const remaining = persisted.filter((m) => m.value !== model.value);
+                await writeCustomCatalog(this.plugin, s.provider, remaining);
+                new Notice(`Removed ${model.value} from ${s.provider}'s catalog.`);
+                this.display();
+              })
+          );
+        }
+      }
+    }
   }
 }
 
