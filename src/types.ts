@@ -39,6 +39,23 @@ export interface ChatSettings {
    * conversations never subscribe to it. Absent until first migrated/set.
    */
   lastSelectedChatModel?: StoredChatModelSelection;
+  /**
+   * Persisted model catalog per provider (Settings → "Model catalog"):
+   * models fetched from the provider's API and/or added as a custom model
+   * ID. Written by src/settings.ts, read by `getModelOptions()` (same file)
+   * to back the composer's model picker (src/turn-execution/catalog.ts).
+   * Absent/partial is normal (falls back to the bundled default list per
+   * provider) — this must round-trip through `saveData()`/`loadData()` so
+   * a fetched/added model survives an Obsidian restart and syncs across
+   * devices, unlike the old in-memory-only cache it replaces.
+   */
+  customModelCatalog?: Partial<Record<Provider, ModelCatalogEntry[]>>;
+}
+
+/** A single model catalog entry: id + display label. Kept minimal and JSON-safe for persistence. */
+export interface ModelCatalogEntry {
+  value: string;
+  label: string;
 }
 
 export const DEFAULT_SETTINGS: ChatSettings = {

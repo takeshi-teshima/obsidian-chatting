@@ -9,7 +9,7 @@ import {
 } from "obsidian";
 import type { ChatSettings, Provider, SelectionScope } from "./types";
 import { DEFAULT_SETTINGS, CHATGPT_OAUTH_DEFAULT_MODEL } from "./types";
-import { ChatSettingTab, getModelOptions } from "./settings";
+import { ChatSettingTab, getModelOptions, setSettingsSource } from "./settings";
 import { migrateLegacyModelSelection, readModelSelectionSeed } from "./model-selection/settings-migration";
 import { ModelSelectionSeedCoordinator } from "./model-selection/seed-coordinator";
 import { ObsidianChatView, VIEW_TYPE_CHAT } from "./ui/chat-view";
@@ -69,6 +69,12 @@ export default class ChatPlugin extends Plugin {
   async onload(): Promise<void> {
     await this.migrateLegacyPluginData();
     await this.loadSettings();
+    // Let src/settings.ts's module-level getModelOptions()/getModelDisplayName()
+    // (called from main.ts, ui/chat-view.ts and turn-execution/catalog.ts
+    // without a plugin reference) read the persisted model catalog. A
+    // getter (not a captured object) so it keeps working across the
+    // reassignment loadSettings() does to `this.settings`.
+    setSettingsSource(() => this.settings);
 
     this.modelSelectionSeedCoordinator = new ModelSelectionSeedCoordinator({
       mutate: async (update) => {
