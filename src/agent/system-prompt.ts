@@ -1,11 +1,13 @@
 import type { ConversationContext } from "../types";
+import { BUILT_IN_AGENT_INSTRUCTIONS, composeSystemPrompt } from "./prompt-composer";
 
 /**
- * The static system prompt that never changes across turns.
+ * The immutable plugin contract: identity, Obsidian invariants, formatting
+ * constraints, and tool-specific hard rules (including local PDF handling).
  * This is the cache-friendly prefix: both Anthropic and OpenAI cache based on
  * exact prefix match, so keeping this identical across calls enables KV cache hits.
  */
-const STATIC_PROMPT = `You are Chatting with AI, an AI assistant embedded in Obsidian. You help users read, edit, create, and organize their notes.
+const BASE_CONTRACT = `You are Chatting with AI, an AI assistant embedded in Obsidian. You help users read, edit, create, and organize their notes.
 
 ## Guidelines
 - Always read a document before editing it. Never guess at content.
@@ -36,11 +38,30 @@ const STATIC_PROMPT = `You are Chatting with AI, an AI assistant embedded in Obs
 - Keep summaries to 2-3 sentences unless more detail is requested.`;
 
 /**
- * Returns the static system prompt.
- * Identical across all API calls, enabling KV cache reuse.
+ * Builds the full system prompt from layered composition:
+ * 1. immutable plugin contract / Obsidian tool invariants (BASE_CONTRACT)
+ * 2. built-in high-quality agent operating instructions
+ * 3. user custom instructions
+ * 4. active prompt-profile instructions (future)
+ * 5. skill catalog (future)
+ *
+ * The result stays stable for a given settings state, which keeps it a valid
+ * cache-friendly prefix for providers that cache on exact-prefix match.
  */
-export function buildSystemPrompt(): string {
-  return STATIC_PROMPT;
+export function buildSystemPrompt(
+  options: {
+    userInstructions?: string;
+    profileInstructions?: string;
+    skillCatalog?: string;
+  } = {}
+): string {
+  return composeSystemPrompt({
+    baseContract: BASE_CONTRACT,
+    builtInAgentInstructions: BUILT_IN_AGENT_INSTRUCTIONS,
+    userInstructions: options.userInstructions,
+    profileInstructions: options.profileInstructions,
+    skillCatalog: options.skillCatalog,
+  });
 }
 
 /**

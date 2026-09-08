@@ -13,6 +13,7 @@ export interface ChatSettings {
   maxIterations: number;
   enableWebSearch: boolean;
   reasoningEffort: ReasoningEffort;
+  customInstructions: string;
 }
 
 export const DEFAULT_SETTINGS: ChatSettings = {
@@ -22,6 +23,7 @@ export const DEFAULT_SETTINGS: ChatSettings = {
   maxIterations: 20,
   enableWebSearch: true,
   reasoningEffort: "auto",
+  customInstructions: "",
 };
 
 /**

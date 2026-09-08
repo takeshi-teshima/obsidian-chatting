@@ -523,6 +523,7 @@ function normalizeSettings(value: unknown): Partial<ChatSettings> {
   if (typeof value.maxIterations === "number") settings.maxIterations = value.maxIterations;
   if (typeof value.enableWebSearch === "boolean") settings.enableWebSearch = value.enableWebSearch;
   if (isReasoningEffort(value.reasoningEffort)) settings.reasoningEffort = value.reasoningEffort;
+  if (typeof value.customInstructions === "string") settings.customInstructions = value.customInstructions;
   return settings;
 }
 
