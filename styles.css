@@ -127,6 +127,47 @@
   white-space: nowrap;
 }
 
+/* Row layout: text block + an always-visible (not hover-only, mobile-first)
+   "more actions" tap target. */
+.ochatting-session-suggestion-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5em;
+}
+
+.ochatting-session-suggestion-text {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.ochatting-session-suggestion-more {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 2em;
+  height: 2em;
+  min-width: 2em;
+  padding: 0;
+  background: transparent;
+  border: none;
+  box-shadow: none;
+  cursor: pointer;
+  color: var(--text-muted);
+  font-size: 1.1em;
+  line-height: 1;
+}
+
+.ochatting-session-suggestion-more:hover {
+  color: var(--text-normal);
+  background: var(--background-modifier-hover);
+  border-radius: var(--radius-s);
+}
+
+.ochatting-session-suggestion-title-warning {
+  color: var(--text-warning, var(--text-error));
+}
+
 /*
  * Session Workspaces v4.1, branch 11: pane-width-based layout (see
  * src/ui/responsive/pane-layout.ts). Keyed off the actual ChatView content
