@@ -19,10 +19,11 @@
     model: string;
     onSend: (text: string, selection: SelectionScope | null) => void;
     onClear: () => void;
+    onReload: () => void;
     onStop: () => void;
   }
 
-  let { app, component, provider, model, onSend, onClear, onStop }: Props = $props();
+  let { app, component, provider, model, onSend, onClear, onReload, onStop }: Props = $props();
 
   let displayModel = $state("");
   let messages = $state<ChatMessage[]>([]);
@@ -217,6 +218,7 @@
       <span class="ochatting-header-model">{displayModel || "No model"}</span>
     </div>
     <button class="ochatting-clear-btn" onclick={onClear}>Clear</button>
+    <button class="ochatting-clear-btn ochatting-reload-btn" onclick={onReload}>Reload</button>
   </div>
 
   <!-- Messages -->
@@ -371,6 +373,10 @@
   .ochatting-clear-btn:hover {
     background: var(--background-modifier-hover);
     color: var(--text-normal);
+  }
+
+  .ochatting-reload-btn {
+    color: var(--text-accent);
   }
 
   /* ─── Messages ──────────────────────────────────────────────────────── */
