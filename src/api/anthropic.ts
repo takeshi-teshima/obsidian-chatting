@@ -6,6 +6,7 @@ import type {
   UnifiedResponse,
   ContentBlock,
 } from "../types";
+import { resolveReasoningConfig } from "../model/reasoning";
 
 const ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages";
 
@@ -48,6 +49,16 @@ export async function sendAnthropicMessage(
   if (is46Model) {
     // Adaptive: Claude decides when/how much to think per request
     body.thinking = { type: "adaptive" };
+
+    // For Claude 4.6+ models, an explicit (non-"auto") effort setting maps
+    // to output_config.effort on top of adaptive thinking. "auto" preserves
+    // pre-existing adaptive-only behavior exactly.
+    if (settings.reasoningEffort !== "auto") {
+      const reasoning = resolveReasoningConfig("anthropic", model, settings.reasoningEffort);
+      if (reasoning.enabled && reasoning.effort) {
+        body.output_config = { effort: reasoning.effort };
+      }
+    }
   } else if (supportsThinking) {
     // Manual: fixed budget for older models
     body.thinking = { type: "enabled", budget_tokens: 8192 };

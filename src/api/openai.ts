@@ -6,6 +6,7 @@ import type {
   UnifiedResponse,
   ContentBlock,
 } from "../types";
+import { resolveReasoningConfig } from "../model/reasoning";
 
 const DEFAULT_OPENAI_URL = "https://api.openai.com";
 
@@ -50,8 +51,9 @@ export async function sendOpenAIMessage(
   }
 
   // Reasoning for reasoning-capable models
-  if (/^o\d/.test(model) || /^gpt-5/.test(model)) {
-    body.reasoning = { effort: "medium" };
+  const reasoning = resolveReasoningConfig("openai", model, settings.reasoningEffort);
+  if (reasoning.enabled) {
+    body.reasoning = reasoning.effort ? { effort: reasoning.effort } : {};
   }
 
   // Tools

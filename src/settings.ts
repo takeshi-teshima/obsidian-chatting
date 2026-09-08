@@ -1,6 +1,6 @@
 import { App, Modal, Notice, PluginSettingTab, Setting, requestUrl } from "obsidian";
 import type ChatPlugin from "./main";
-import type { Provider } from "./types";
+import type { Provider, ChatSettings } from "./types";
 import { CHATGPT_OAUTH_DEFAULT_MODEL } from "./types";
 import type { ChatGPTDeviceAuthorization, PollHandle } from "./auth/chatgptOAuth";
 
@@ -93,6 +93,26 @@ export class ChatSettingTab extends PluginSettingTab {
 
     // ─── Model ────────────────────────────────────────────────────────
     this.renderModelSection(containerEl);
+
+    // ─── Reasoning effort ───────────────────────────────────────────────
+    new Setting(containerEl)
+      .setName("Reasoning effort")
+      .setDesc(
+        "How much the model should think before responding. Unsupported levels are mapped down conservatively per model."
+      )
+      .addDropdown((dropdown) =>
+        dropdown
+          .addOption("auto", "Auto (recommended)")
+          .addOption("low", "Low")
+          .addOption("medium", "Medium")
+          .addOption("high", "High")
+          .addOption("max", "Max")
+          .setValue(s.reasoningEffort)
+          .onChange(async (value) => {
+            s.reasoningEffort = value as ChatSettings["reasoningEffort"];
+            await this.plugin.saveSettings();
+          })
+      );
 
     // ─── Web search ───────────────────────────────────────────────────
     new Setting(containerEl)

@@ -2,6 +2,9 @@
 
 export type Provider = "anthropic" | "openai" | "chatgpt-oauth";
 
+export type { ReasoningEffort } from "./model/capabilities";
+import type { ReasoningEffort } from "./model/capabilities";
+
 export interface ChatSettings {
   provider: Provider;
   /** API key for `anthropic` and `openai`. Empty for `chatgpt-oauth` (which uses SecretStorage credentials). */
@@ -9,6 +12,7 @@ export interface ChatSettings {
   model: string;
   maxIterations: number;
   enableWebSearch: boolean;
+  reasoningEffort: ReasoningEffort;
 }
 
 export const DEFAULT_SETTINGS: ChatSettings = {
@@ -17,6 +21,7 @@ export const DEFAULT_SETTINGS: ChatSettings = {
   model: "claude-sonnet-4-6",
   maxIterations: 20,
   enableWebSearch: true,
+  reasoningEffort: "auto",
 };
 
 /**
