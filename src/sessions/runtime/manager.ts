@@ -1,6 +1,7 @@
 import type { SessionMetadata } from "../metadata/types";
 import { applyNextTurnSelection, resolveNextTurnExecution, type TurnSelectionFallback } from "../../turn-execution/selection";
 import type { TurnExecutionConfig } from "../../turn-execution/types";
+import type { UnifiedMessage } from "../../types";
 import type { SessionWorkspaceStore, CreateSessionInput } from "../store";
 import { SessionRuntime, type SessionAgentAdapter } from "./runtime";
 import type {
@@ -47,6 +48,28 @@ export interface SessionManagerOptions {
    * silently stale state.
    */
   onAutoReload?: (sessionId: string, result: { changed: boolean } | { error: unknown }) => void;
+  /**
+   * Injected LLM call for auto-generating a conversation title (Claudian
+   * parity). Deliberately the ONLY point of contact with `src/api/*` — this
+   * keeps SessionManager free of concrete provider imports, matching the
+   * same DI pattern as `agentFactory`/`getTurnSelectionFallback`. Wired from
+   * `src/main.ts` using `sendMessage()` (src/api/client.ts). See `run()` for
+   * the automatic trigger and `regenerateTitle()` for the explicit one.
+   */
+  generateTitle?: (input: {
+    sessionId: string;
+    metadata: SessionMetadata;
+    firstUserText: string;
+    firstAssistantText: string;
+  }) => Promise<string>;
+  /**
+   * Live gate for the AUTOMATIC (post-first-turn) title generation trigger
+   * only — read fresh on every admission, not captured once at construction,
+   * so toggling the setting takes effect without a plugin reload. Defaults
+   * to always-enabled when absent. `regenerateTitle()` (explicit user
+   * action) intentionally bypasses this gate.
+   */
+  isTitleGenerationEnabled?: () => boolean;
 }
 
 interface QueuedRun {
@@ -74,6 +97,8 @@ export class SessionManager {
   private readonly maxHydratedRuntimes: number;
   private readonly onBackgroundCompletion?: SessionManagerOptions["onBackgroundCompletion"];
   private readonly onAutoReload?: SessionManagerOptions["onAutoReload"];
+  private readonly generateTitle?: SessionManagerOptions["generateTitle"];
+  private readonly isTitleGenerationEnabled: () => boolean;
 
   private readonly runtimes = new Map<string, SessionRuntime>();
   private readonly runtimeUnsubscribers = new Map<string, () => void>();
@@ -82,6 +107,25 @@ export class SessionManager {
   private readonly listeners = new Set<(event: SessionManagerEvent) => void>();
   private readonly queue: QueuedRun[] = [];
   private runningCount = 0;
+  /**
+   * Admission-time eligibility snapshot for the automatic title-generation
+   * trigger, keyed by sessionId. Populated in `run()` BEFORE the turn
+   * starts and consumed in `handleTerminal()` after it finishes.
+   *
+   * This must be decided pre-turn, not post-turn: `SessionWorkspaceStore
+   * .saveHistoryAndActivity()` already applies its own crude "first user
+   * message, truncated" heuristic title to any session still titled "New
+   * chat" as soon as the FIRST mid-turn checkpoint lands (see
+   * `SessionRuntime.checkpointMessages()`, fired from the `onResponse`/
+   * `onToolResult` callbacks) — i.e. well before this turn's `run()` call
+   * resolves. If eligibility were (re)checked after the turn completes, a
+   * normal successful turn would almost never see `title === "New chat"`
+   * anymore and LLM title generation would never fire. Capturing the
+   * pristine-ness up front sidesteps that race; the LLM-generated title (if
+   * it succeeds) simply overwrites whatever heuristic title landed
+   * mid-turn.
+   */
+  private readonly titleGenerationEligible = new Map<string, boolean>();
 
   constructor(options: SessionManagerOptions) {
     this.store = options.store;
@@ -92,6 +136,8 @@ export class SessionManager {
     this.maxHydratedRuntimes = clamp(options.maxHydratedRuntimes ?? 8, 2, 24);
     this.onBackgroundCompletion = options.onBackgroundCompletion;
     this.onAutoReload = options.onAutoReload;
+    this.generateTitle = options.generateTitle;
+    this.isTitleGenerationEnabled = options.isTitleGenerationEnabled ?? (() => true);
   }
 
   subscribe(listener: (event: SessionManagerEvent) => void): () => void {
@@ -209,6 +255,13 @@ export class SessionManager {
       ),
     };
 
+    if (this.generateTitle) {
+      this.titleGenerationEligible.set(
+        sessionId,
+        this.isTitleGenerationEnabled() && isTitleGenerationEligible(metadata),
+      );
+    }
+
     if (this.runningCount >= this.maxConcurrentRuns) {
       runtime.setQueued();
       return new Promise<void>((resolve, reject) => {
@@ -271,6 +324,19 @@ export class SessionManager {
       if (!next) throw new Error(`Session not found: ${sessionId}`);
     }
     this.emit({ type: "catalog-changed", sessionId });
+  }
+
+  /**
+   * Explicit user-triggered re-run of title generation (command +
+   * session-switcher-modal menu item). Unlike the automatic post-first-turn
+   * trigger in `run()`/`handleTerminal()`, this bypasses BOTH the "still
+   * titled 'New chat'" guard and the `titleGenerationEnabled` setting gate —
+   * an explicit request always attempts generation, overwriting whatever
+   * title/status is currently there.
+   */
+  async regenerateTitle(sessionId: string): Promise<void> {
+    if (!this.generateTitle) throw new Error("Title generation is not configured.");
+    await this.runTitleGeneration(sessionId);
   }
 
   async setPinned(sessionId: string, pinned: boolean): Promise<void> {
@@ -465,7 +531,74 @@ export class SessionManager {
       await runtime.markUnread();
       this.onBackgroundCompletion?.(runtime.id, outcome);
     }
+
+    // Fire-and-forget: must never delay this handler (which is itself
+    // already fire-and-forget from SessionRuntime.finish()) or affect the
+    // SessionRunOutcome already reported to the caller of run().
+    const eligible = this.titleGenerationEligible.get(runtime.id) ?? false;
+    this.titleGenerationEligible.delete(runtime.id);
+    if (outcome === "completed" && eligible && this.generateTitle) {
+      void this.runTitleGeneration(runtime.id).catch((error) => {
+        console.error(`[chatting-with-ai] title generation failed for session ${runtime.id}`, error);
+      });
+    }
+
     this.emit({ type: "catalog-changed", sessionId: runtime.id });
+  }
+
+  /**
+   * Shared implementation for both the automatic post-first-turn trigger and
+   * the explicit `regenerateTitle()` command/menu path. Never throws: a
+   * title-generation failure is caught, recorded as
+   * `titleGenerationStatus: "failed"`, and otherwise swallowed — it must
+   * never surface as a turn error to the user.
+   */
+  private async runTitleGeneration(sessionId: string): Promise<void> {
+    if (!this.generateTitle) return;
+    const workspace = await this.store.load(sessionId);
+    if (!workspace) return;
+
+    const { firstUserText, firstAssistantText } = extractFirstExchange(workspace.messages);
+    await this.patchMetadata(sessionId, (metadata) => ({ ...metadata, titleGenerationStatus: "pending" }));
+
+    try {
+      const raw = await this.generateTitle({
+        sessionId,
+        metadata: workspace.metadata,
+        firstUserText,
+        firstAssistantText,
+      });
+      const title = sanitizeGeneratedTitle(raw);
+      if (!title) throw new Error("Title generation returned an empty response.");
+      await this.patchMetadata(sessionId, (metadata) => ({
+        ...metadata,
+        title,
+        titleGenerationStatus: "success",
+      }));
+    } catch (error) {
+      console.error(`[chatting-with-ai] title generation failed for session ${sessionId}`, error);
+      await this.patchMetadata(sessionId, (metadata) => ({ ...metadata, titleGenerationStatus: "failed" }));
+    }
+  }
+
+  /**
+   * Same busy/hydrated-idle/not-hydrated dispatch as `rename()` (see its
+   * comment above) — extracted here rather than reused by `rename()` itself
+   * so `rename()`'s existing behavior stays byte-for-byte unchanged.
+   */
+  private async patchMetadata(
+    sessionId: string,
+    updater: (metadata: SessionMetadata) => SessionMetadata,
+  ): Promise<void> {
+    const runtime = this.runtimes.get(sessionId);
+    if (runtime?.isBusy) {
+      await this.store.updateMetadata(sessionId, updater);
+    } else if (runtime) {
+      await runtime.updateMetadata(updater);
+    } else {
+      await this.store.updateMetadata(sessionId, updater);
+    }
+    this.emit({ type: "catalog-changed", sessionId });
   }
 
   private async rebindViewsAwayFrom(sessionId: string): Promise<void> {
@@ -509,4 +642,55 @@ export class SessionManager {
 
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
+}
+
+/** Pre-turn admission check: still the untouched default, and no generation already in flight/done. */
+function isTitleGenerationEligible(metadata: SessionMetadata): boolean {
+  return (
+    metadata.title === "New chat" &&
+    metadata.titleGenerationStatus !== "pending" &&
+    metadata.titleGenerationStatus !== "success"
+  );
+}
+
+const TITLE_GENERATION_TEXT_LIMIT = 500;
+const GENERATED_TITLE_MAX_LENGTH = 60;
+
+function extractFirstExchange(
+  messages: readonly UnifiedMessage[],
+): { firstUserText: string; firstAssistantText: string } {
+  const firstUser = messages.find((message) => message.role === "user");
+  const firstAssistant = messages.find((message) => message.role === "assistant");
+  return {
+    firstUserText: truncateForTitlePrompt(textOfMessage(firstUser)),
+    firstAssistantText: truncateForTitlePrompt(textOfMessage(firstAssistant)),
+  };
+}
+
+function textOfMessage(message: UnifiedMessage | undefined): string {
+  if (!message) return "";
+  const content = message.content;
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  return content
+    .map((block) => (block.type === "text" ? block.text ?? "" : ""))
+    .filter(Boolean)
+    .join("\n");
+}
+
+function truncateForTitlePrompt(text: string): string {
+  const trimmed = text.replace(/\s+/g, " ").trim();
+  return trimmed.length <= TITLE_GENERATION_TEXT_LIMIT
+    ? trimmed
+    : trimmed.slice(0, TITLE_GENERATION_TEXT_LIMIT).trimEnd();
+}
+
+/** Trims whitespace, strips surrounding quote characters, and caps length. */
+function sanitizeGeneratedTitle(raw: string): string {
+  let title = raw.trim();
+  title = title.replace(/^["'“”‘’]+/, "").replace(/["'“”‘’]+$/, "").trim();
+  if (title.length > GENERATED_TITLE_MAX_LENGTH) {
+    title = title.slice(0, GENERATED_TITLE_MAX_LENGTH).trimEnd();
+  }
+  return title;
 }

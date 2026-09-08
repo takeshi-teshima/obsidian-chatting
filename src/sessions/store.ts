@@ -140,9 +140,18 @@ export class SessionWorkspaceStore {
       loaded.messages = [...messages];
       loaded.metadata.lastActivityAt = Math.max(loaded.metadata.lastActivityAt, activityAt);
       loaded.metadata = withHistoryRevision(loaded.metadata, messages.length);
-      if (loaded.metadata.title.trim() === "" || loaded.metadata.title === "New chat") {
-        loaded.metadata.title = deriveTitle(messages) || loaded.metadata.title;
-      }
+      // Deliberately does NOT auto-derive a title from `messages` here
+      // anymore (this used to overwrite a "New chat" title with a crude
+      // "first message, truncated" heuristic on every mid-turn checkpoint).
+      // Doing it here raced with the real LLM-based title generation
+      // SessionManager now owns (see
+      // `SessionManager.run()`'s admission-time eligibility snapshot in
+      // sessions/runtime/manager.ts): by the time a turn's `run()` call
+      // resolved, this heuristic had usually already overwritten
+      // `title === "New chat"`, so the proper generator's "still pristine"
+      // guard would almost never see a pristine title. Title updates now
+      // flow exclusively through SessionManager (this heuristic path, plus
+      // the explicit rename()/regenerateTitle() commands).
       await this.history.replace(id, messages);
       await this.metadata.save(loaded.metadata, loaded.unknownMetadataFields);
       await this.local.save(loaded.localState);
@@ -305,16 +314,6 @@ function withHistoryRevision(metadata: SessionMetadata, messageCount: number): S
 
 export function deriveHistoryDetails(messages: readonly UnifiedMessage[]): { messageCount: number; preview: string } {
   return { messageCount: messages.length, preview: derivePreview(messages) };
-}
-
-function deriveTitle(messages: readonly UnifiedMessage[]): string {
-  for (const message of messages) {
-    if (message.role !== "user") continue;
-    const text = textOfMessage(message).replace(/\s+/g, " ").trim();
-    if (!text) continue;
-    return text.length <= 64 ? text : `${text.slice(0, 61).trimEnd()}...`;
-  }
-  return "";
 }
 
 function derivePreview(messages: readonly UnifiedMessage[]): string {
