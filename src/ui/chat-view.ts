@@ -15,6 +15,7 @@ interface ChatContainerProps {
   model: string;
   onSend: (text: string, selection: SelectionScope | null) => void;
   onClear: () => void;
+  onReload: () => void;
   onStop: () => void;
 }
 
@@ -83,32 +84,38 @@ export class ObsidianChatView extends ItemView {
           void this.handleUserMessage(text, selection);
         },
         onClear: () => this.handleClear(),
+        onReload: () => void this.handleReload(),
         onStop: () => this.handleStop(),
       },
     });
 
-    // Replay chat history into the UI
+    this.renderHistory();
+    this.chatContainer.focus();
+  }
+
+  /** Render `this.plugin.chatHistory` into the mounted chat container. */
+  private renderHistory(): void {
+    const chat = this.chatContainer;
+    if (!chat) return;
     for (const msg of this.plugin.chatHistory) {
       switch (msg.type) {
         case "user":
-          this.chatContainer.addUserMessage(msg.text!);
+          chat.addUserMessage(msg.text!);
           break;
         case "assistant":
-          this.chatContainer.addAssistantMessage(msg.text!);
+          chat.addAssistantMessage(msg.text!);
           break;
         case "tool-result":
           if (msg.toolName && msg.toolResult) {
-            const id = this.chatContainer.addToolCall(msg.toolName, msg.toolInput || {});
-            this.chatContainer.updateToolResult(id, msg.toolName, msg.toolResult);
+            const id = chat.addToolCall(msg.toolName, msg.toolInput || {});
+            chat.updateToolResult(id, msg.toolName, msg.toolResult);
           }
           break;
         case "error":
-          this.chatContainer.addError(msg.text!);
+          chat.addError(msg.text!);
           break;
       }
     }
-
-    this.chatContainer.focus();
   }
 
   async onClose(): Promise<void> {
@@ -239,5 +246,24 @@ export class ObsidianChatView extends ItemView {
     this.chatContainer?.setInputEnabled(true);
     // Clear persisted state
     void this.plugin.saveChatHistory();
+  }
+
+  /**
+   * Reload persisted chat state from disk without wiping the current
+   * in-memory/visible conversation via a full clear. Useful when
+   * chat-state.json was edited externally (e.g. to trim oversized tool
+   * results that were causing "input exceeds context window" errors)
+   * and the running view/plugin instance needs to pick up that edit
+   * without disabling/re-enabling the plugin or restarting Obsidian.
+   */
+  private async handleReload(): Promise<void> {
+    this.plugin.agent.abort();
+    this.running = false;
+    await this.plugin.loadChatHistory();
+    this.chatContainer?.clearMessages();
+    this.renderHistory();
+    this.chatContainer?.setInputEnabled(true);
+    this.chatContainer?.focus();
+    new Notice("Chat reloaded from disk.");
   }
 }

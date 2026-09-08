@@ -1,5 +1,6 @@
 import { App, TFile, normalizePath } from "obsidian";
 import type { ToolResult } from "../types";
+import { executePdfTool } from "../pdf/tools";
 
 type AskUserCallback = (question: string) => Promise<string>;
 
@@ -46,6 +47,10 @@ export async function executeTool(
         return getCurrentDatetime();
       case "open_document":
         return await openDocument(app, input);
+      case "pdf_info":
+      case "pdf_read":
+      case "pdf_search":
+        return await executePdfTool(app, toolName, input);
       case "ask_user":
         return await askUser(input, onAskUser);
       default:
