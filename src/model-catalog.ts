@@ -26,9 +26,12 @@ export const FALLBACK_MODELS: Record<string, ModelOption[]> = {
   // Mirrors the bundled `models.json` shipped with the official OpenAI Codex
   // CLI. These are the slugs the Codex backend currently accepts when the
   // request is authenticated with a ChatGPT account. Sorted by Codex CLI
-  // priority (lowest first = recommended). Update when upstream changes.
+  // priority (lowest first = default — see the "Default" badge in Settings
+  // → "Manage models…", which reflects LIST POSITION, not a hardcoded
+  // label; reordering the list in that UI changes the actual default).
+  // Update when upstream changes.
   "chatgpt-oauth": [
-    { value: "gpt-5.5", label: "GPT-5.5 (recommended)" },
+    { value: "gpt-5.5", label: "GPT-5.5" },
     { value: "gpt-5.4", label: "GPT-5.4" },
     { value: "gpt-5.4-mini", label: "GPT-5.4-Mini" },
     { value: "gpt-5.3-codex", label: "GPT-5.3-Codex" },

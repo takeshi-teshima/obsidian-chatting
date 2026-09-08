@@ -423,59 +423,142 @@ export class ChatSettingTab extends PluginSettingTab {
    */
   private renderModelSection(containerEl: HTMLElement): void {
     const s = this.plugin.settings;
-    const custom = s.customModelCatalog?.[s.provider];
+    const models = getModelOptions(s.provider);
+    const defaultModel = models[0];
 
-    const catalogSetting = new Setting(containerEl)
+    // Deliberately just a summary + a button into a dedicated modal now
+    // (was previously a flat run of `Setting` rows — fetch button, add-custom
+    // row, then one `Setting` per model — rendered at the same visual level
+    // as unrelated settings like "Provider to configure"/"Reasoning effort"
+    // above and below it, with no way to reorder entries and a hardcoded
+    // "(recommended)" string baked into one bundled label that didn't track
+    // anything real). The catalog is genuinely orderable data (list
+    // position IS the default — see `defaultModelFor()` in main.ts, which
+    // literally reads `getModelOptions(provider)[0]`), so it gets a proper
+    // list-management UI instead of masquerading as N separate settings.
+    new Setting(containerEl)
       .setName("Model catalog")
       .setDesc(
-        custom && custom.length > 0
-          ? `${custom.length} models available for ${s.provider} in the composer's model picker (persisted, syncs across devices).`
-          : "Using the bundled default list. Fetch to refresh from the provider's API, or add a custom model ID below."
-      );
-
-    // Refresh button — only for providers that ship a meaningful model
-    // catalog endpoint behind their auth.
-    //
-    // chatgpt-oauth is intentionally excluded. The Codex backend either
-    // returns the same five slugs we already hardcode, or returns the
-    // chat.com UI catalog (dash-form slugs the /responses endpoint then
-    // rejects). A live fetch adds zero value and creates confusing failure
-    // modes. Users who need a non-default Codex slug can add it as custom.
-    const canFetchModels =
-      (s.provider === "anthropic" && !!s.apiKey) ||
-      (s.provider === "openai" && !!s.apiKey);
-    if (canFetchModels) {
-      catalogSetting.addButton((btn) =>
+        defaultModel
+          ? `${models.length} model${models.length === 1 ? "" : "s"} for ${s.provider}. Default: ${defaultModel.label}.`
+          : `No models configured for ${s.provider}.`
+      )
+      .addButton((btn) =>
         btn
-          .setIcon("refresh-cw")
-          .setTooltip("Fetch models from API")
-          .onClick(async () => {
-            btn.setDisabled(true);
-            try {
-              const fetched = await fetchModelsFromAPI(s.provider, s.apiKey);
-              await writeCustomCatalog(this.plugin, s.provider, fetched);
-              new Notice(`Loaded ${fetched.length} models. Pick one in the composer's model selector.`);
-              this.display();
-            } catch (e) {
-              const msg = e instanceof Error ? e.message : String(e);
-              new Notice(`Failed to fetch models: ${msg}`);
-            }
+          .setButtonText("Manage models…")
+          .onClick(() => {
+            new ModelCatalogModal(this.app, this.plugin, s.provider, () => this.display()).open();
           })
       );
-    }
+  }
+}
 
-    // Add-a-custom-model-ID: extends the catalog the composer reads from; it
-    // does not itself select anything for execution.
+// ─── Model catalog management (ordering, add/remove, fetch) ────────────────
+
+/**
+ * Dedicated modal for managing one provider's model catalog: reorder (list
+ * position is the real default — see `renderModelSection`'s comment above),
+ * add a custom model ID, fetch from the provider's API, remove an entry, or
+ * reset back to the bundled defaults. Kept out of the main settings list so
+ * it reads as its own tool rather than N flat rows among unrelated settings.
+ */
+class ModelCatalogModal extends Modal {
+  constructor(
+    app: App,
+    private readonly plugin: ChatPlugin,
+    private readonly provider: Provider,
+    private readonly onClose_: () => void,
+  ) {
+    super(app);
+  }
+
+  onOpen(): void {
+    this.render();
+  }
+
+  onClose(): void {
+    this.contentEl.empty();
+    this.onClose_();
+  }
+
+  private render(): void {
+    const { contentEl } = this;
+    contentEl.empty();
+    const s = this.plugin.settings;
+
+    new Setting(contentEl).setName(`Manage models — ${this.provider}`).setHeading();
+    contentEl.createEl("p", {
+      cls: "setting-item-description",
+      text: "Drag order matters: the top model is the default used for new conversations on this provider. Use ▲/▼ to reorder.",
+    });
+
+    // The list this modal edits is always the FULL effective catalog
+    // (persisted override if one exists, else a copy of the bundled
+    // defaults) — not a merge-and-partially-lock split like the old inline
+    // UI. Any edit here (reorder, delete, add) writes the whole list back
+    // as the provider's persisted override, so bundled entries become fully
+    // user-owned (reorderable/deletable) the moment this modal is used.
+    // Emptying it out entirely still degrades safely back to the bundled
+    // fallback (see `getModelOptions()`/model-catalog-persistence.check.ts),
+    // and "Reset to bundled defaults" below does that explicitly.
+    const current = s.customModelCatalog?.[this.provider] ?? [...(FALLBACK_MODELS[this.provider] ?? [])];
+
+    const listEl = contentEl.createDiv({ cls: "ochatting-model-catalog-list" });
+    current.forEach((model, index) => {
+      const row = new Setting(listEl)
+        .setName(model.label)
+        .setDesc(model.value);
+      if (index === 0) {
+        row.nameEl.createSpan({ text: " Default", cls: "ochatting-model-catalog-default-badge" });
+      }
+      row.addExtraButton((btn) =>
+        btn
+          .setIcon("arrow-up")
+          .setTooltip("Move up")
+          .setDisabled(index === 0)
+          .onClick(async () => {
+            const next = [...current];
+            [next[index - 1], next[index]] = [next[index], next[index - 1]];
+            await writeCustomCatalog(this.plugin, this.provider, next);
+            this.render();
+          })
+      );
+      row.addExtraButton((btn) =>
+        btn
+          .setIcon("arrow-down")
+          .setTooltip("Move down")
+          .setDisabled(index === current.length - 1)
+          .onClick(async () => {
+            const next = [...current];
+            [next[index], next[index + 1]] = [next[index + 1], next[index]];
+            await writeCustomCatalog(this.plugin, this.provider, next);
+            this.render();
+          })
+      );
+      row.addButton((btn) =>
+        btn
+          .setIcon("trash-2")
+          .setTooltip(`Remove ${model.value}`)
+          .onClick(async () => {
+            const next = current.filter((_, i) => i !== index);
+            await writeCustomCatalog(this.plugin, this.provider, next);
+            this.render();
+          })
+      );
+    });
+
+    // Add-a-custom-model-ID: appended to the end (not the default) unless
+    // moved up.
     let customModelId = "";
-    new Setting(containerEl)
+    new Setting(contentEl)
       .setName("Add custom model ID")
-      .setDesc(`Adds a model to ${s.provider}'s catalog in the composer's picker (does not select it).`)
+      .setDesc(`Adds a model to the bottom of ${this.provider}'s list above.`)
       .addText((text) =>
         text
           .setPlaceholder(
-            s.provider === "anthropic"
+            this.provider === "anthropic"
               ? "claude-sonnet-4-20250514"
-              : s.provider === "chatgpt-oauth"
+              : this.provider === "chatgpt-oauth"
                 ? CHATGPT_OAUTH_DEFAULT_MODEL
                 : "gpt-4o",
           )
@@ -484,51 +567,63 @@ export class ChatSettingTab extends PluginSettingTab {
       .addButton((btn) =>
         btn.setButtonText("Add").onClick(async () => {
           if (!customModelId) return;
-          const existing = s.customModelCatalog?.[s.provider] ?? [...(FALLBACK_MODELS[s.provider] ?? [])];
-          if (!existing.some((m) => m.value === customModelId)) {
-            await writeCustomCatalog(this.plugin, s.provider, [
-              ...existing,
+          if (!current.some((m) => m.value === customModelId)) {
+            await writeCustomCatalog(this.plugin, this.provider, [
+              ...current,
               { value: customModelId, label: customModelId },
             ]);
           }
-          new Notice(`Added ${customModelId} to ${s.provider}'s catalog.`);
+          new Notice(`Added ${customModelId}.`);
           customModelId = "";
-          this.display();
+          this.render();
         })
       );
 
-    // ─── Catalog list: bundled fallback + persisted custom/fetched entries,
-    // de-duplicated by value. Only persisted entries (the ones the user
-    // fetched or typed in) are deletable — the bundled list isn't user data.
-    const persisted = s.customModelCatalog?.[s.provider] ?? [];
-    const persistedValues = new Set(persisted.map((m) => m.value));
-    const merged: ModelOption[] = [...persisted];
-    for (const fallback of FALLBACK_MODELS[s.provider] ?? []) {
-      if (!persistedValues.has(fallback.value)) merged.push(fallback);
+    // Refresh-from-API — only for providers that ship a meaningful model
+    // catalog endpoint behind their auth.
+    //
+    // chatgpt-oauth is intentionally excluded. The Codex backend either
+    // returns the same five slugs we already hardcode, or returns the
+    // chat.com UI catalog (dash-form slugs the /responses endpoint then
+    // rejects). A live fetch adds zero value and creates confusing failure
+    // modes. Users who need a non-default Codex slug can add it as custom.
+    const canFetchModels =
+      (this.provider === "anthropic" && !!s.apiKey) ||
+      (this.provider === "openai" && !!s.apiKey);
+    const actionsRow = new Setting(contentEl)
+      .setName("Fetch / reset")
+      .setDesc("Fetch replaces the list below with the provider's current API catalog. Reset discards any customization and restores the bundled defaults, in their original order.");
+    if (canFetchModels) {
+      actionsRow.addButton((btn) =>
+        btn
+          .setIcon("refresh-cw")
+          .setTooltip("Fetch models from API")
+          .onClick(async () => {
+            btn.setDisabled(true);
+            try {
+              const fetched = await fetchModelsFromAPI(this.provider, s.apiKey);
+              await writeCustomCatalog(this.plugin, this.provider, fetched);
+              new Notice(`Loaded ${fetched.length} models.`);
+              this.render();
+            } catch (e) {
+              const msg = e instanceof Error ? e.message : String(e);
+              new Notice(`Failed to fetch models: ${msg}`);
+            } finally {
+              btn.setDisabled(false);
+            }
+          })
+      );
     }
-
-    if (merged.length > 0) {
-      const listContainer = containerEl.createDiv({ cls: "ochatting-model-catalog-list" });
-      for (const model of merged) {
-        const deletable = persistedValues.has(model.value);
-        const row = new Setting(listContainer)
-          .setName(model.label)
-          .setDesc(deletable ? `${model.value} (custom/fetched)` : `${model.value} (bundled default)`);
-        if (deletable) {
-          row.addButton((btn) =>
-            btn
-              .setIcon("trash-2")
-              .setTooltip(`Remove ${model.value}`)
-              .onClick(async () => {
-                const remaining = persisted.filter((m) => m.value !== model.value);
-                await writeCustomCatalog(this.plugin, s.provider, remaining);
-                new Notice(`Removed ${model.value} from ${s.provider}'s catalog.`);
-                this.display();
-              })
-          );
-        }
-      }
-    }
+    actionsRow.addButton((btn) =>
+      btn
+        .setIcon("rotate-ccw")
+        .setTooltip("Reset to bundled defaults")
+        .onClick(async () => {
+          await writeCustomCatalog(this.plugin, this.provider, []);
+          new Notice(`Reset ${this.provider}'s catalog to the bundled defaults.`);
+          this.render();
+        })
+    );
   }
 }
 
