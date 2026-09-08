@@ -69,10 +69,14 @@ export class ChatSettingTab extends PluginSettingTab {
     containerEl.empty();
     const s = this.plugin.settings;
 
-    // ─── Provider ─────────────────────────────────────────────────────
+    // ─── Provider (credential configuration target only) ───────────────
+    // This no longer chooses "the" active chat provider/model — that is now
+    // owned by the composer's per-conversation model picker (Session
+    // Workspaces v4.3, branch 14: Claudian-style model selection). It only
+    // selects which provider's credentials the section below edits.
     new Setting(containerEl)
-      .setName("Provider")
-      .setDesc("Which AI provider to use")
+      .setName("Provider to configure")
+      .setDesc("Which provider's credentials to set up below. The model actually used by a conversation is chosen in the composer, not here.")
       .addDropdown((dropdown) =>
         dropdown
           .addOption("anthropic", "Anthropic")
@@ -83,12 +87,7 @@ export class ChatSettingTab extends PluginSettingTab {
             // Load the new provider's key BEFORE saving,
             // otherwise the old provider's key gets saved under the new provider name
             s.provider = value as Provider;
-            s.model = "";
             this.plugin.reloadApiKeyForProvider();
-            // Set a sensible default model for chatgpt-oauth (no API to fetch from)
-            if (s.provider === "chatgpt-oauth" && !s.model) {
-              s.model = CHATGPT_OAUTH_DEFAULT_MODEL;
-            }
             await this.plugin.saveSettings();
             window.setTimeout(() => this.display(), 10);
           })
@@ -106,9 +105,9 @@ export class ChatSettingTab extends PluginSettingTab {
 
     // ─── Reasoning effort ───────────────────────────────────────────────
     new Setting(containerEl)
-      .setName("Reasoning effort")
+      .setName("Default reasoning effort")
       .setDesc(
-        "How much the model should think before responding. Unsupported levels are mapped down conservatively per model."
+        "Seed value for new conversations only. Unsupported levels are mapped down conservatively per model. Change it per-conversation in the composer's reasoning selector."
       )
       .addDropdown((dropdown) =>
         dropdown
@@ -354,37 +353,27 @@ export class ChatSettingTab extends PluginSettingTab {
 
   // ─── Model picker ─────────────────────────────────────────────────────────
 
+  /**
+   * Model CATALOG maintenance for the provider currently being configured
+   * above — not an execution-model selector. Which model actually runs a
+   * turn is chosen in the composer (src/ui/ModelSelector.svelte), which
+   * always edits the bound conversation's next-turn selection
+   * (SessionMetadata.selectedModel / TurnExecutionConfig at Send). Settings
+   * only lets you (a) fetch the current provider's model list into the
+   * catalog the composer reads from, and (b) register a custom model ID
+   * that isn't in the bundled/fetched list yet.
+   */
   private renderModelSection(containerEl: HTMLElement): void {
     const s = this.plugin.settings;
     const cached = modelCache.get(s.provider);
-    const models = cached || FALLBACK_MODELS[s.provider] || FALLBACK_MODELS.anthropic;
 
-    const modelSetting = new Setting(containerEl)
-      .setName("Model")
-      .setDesc(cached ? `${cached.length} models from API` : "Using defaults. Click refresh to load from API.")
-      .addDropdown((dropdown) => {
-        for (const m of models) {
-          dropdown.addOption(m.value, m.label);
-        }
-        dropdown.addOption("__custom__", "Custom...");
-
-        // If current model isn't in the list, add it
-        if (s.model && !models.some((m) => m.value === s.model)) {
-          dropdown.addOption(s.model, `${s.model} (current)`);
-        }
-
-        dropdown.setValue(s.model || models[0]?.value || "");
-        dropdown.onChange(async (value) => {
-          if (value === "__custom__") {
-            s.model = "";
-            await this.plugin.saveSettings();
-            window.setTimeout(() => this.display(), 10);
-          } else {
-            s.model = value;
-            await this.plugin.saveSettings();
-          }
-        });
-      });
+    const catalogSetting = new Setting(containerEl)
+      .setName("Model catalog")
+      .setDesc(
+        cached
+          ? `${cached.length} models available for ${s.provider} in the composer's model picker.`
+          : "Using the bundled default list. Fetch to refresh from the provider's API, or add a custom model ID below."
+      );
 
     // Refresh button — only for providers that ship a meaningful model
     // catalog endpoint behind their auth.
@@ -393,12 +382,12 @@ export class ChatSettingTab extends PluginSettingTab {
     // returns the same five slugs we already hardcode, or returns the
     // chat.com UI catalog (dash-form slugs the /responses endpoint then
     // rejects). A live fetch adds zero value and creates confusing failure
-    // modes. Users who need a non-default Codex slug can pick "Custom...".
+    // modes. Users who need a non-default Codex slug can add it as custom.
     const canFetchModels =
       (s.provider === "anthropic" && !!s.apiKey) ||
       (s.provider === "openai" && !!s.apiKey);
     if (canFetchModels) {
-      modelSetting.addButton((btn) =>
+      catalogSetting.addButton((btn) =>
         btn
           .setIcon("refresh-cw")
           .setTooltip("Fetch models from API")
@@ -407,11 +396,7 @@ export class ChatSettingTab extends PluginSettingTab {
             try {
               const fetched = await fetchModelsFromAPI(s.provider, s.apiKey);
               modelCache.set(s.provider, fetched);
-              new Notice(`Loaded ${fetched.length} models`);
-              if (!s.model && fetched.length > 0) {
-                s.model = fetched[0].value;
-                await this.plugin.saveSettings();
-              }
+              new Notice(`Loaded ${fetched.length} models. Pick one in the composer's model selector.`);
               this.display();
             } catch (e) {
               const msg = e instanceof Error ? e.message : String(e);
@@ -421,27 +406,36 @@ export class ChatSettingTab extends PluginSettingTab {
       );
     }
 
-    // Custom model text field (shown when Custom... selected or model is empty)
-    if (!s.model) {
-      new Setting(containerEl)
-        .setName("Custom model ID")
-        .setDesc("Enter the full model identifier")
-        .addText((text) =>
-          text
-            .setPlaceholder(
-              s.provider === "anthropic"
-                ? "claude-sonnet-4-20250514"
-                : s.provider === "chatgpt-oauth"
-                  ? CHATGPT_OAUTH_DEFAULT_MODEL
-                  : "gpt-4o",
-            )
-            .setValue(s.model)
-            .onChange(async (value) => {
-              s.model = value.trim();
-              await this.plugin.saveSettings();
-            })
-        );
-    }
+    // Add-a-custom-model-ID: extends the catalog the composer reads from; it
+    // does not itself select anything for execution.
+    let customModelId = "";
+    new Setting(containerEl)
+      .setName("Add custom model ID")
+      .setDesc(`Adds a model to ${s.provider}'s catalog in the composer's picker (does not select it).`)
+      .addText((text) =>
+        text
+          .setPlaceholder(
+            s.provider === "anthropic"
+              ? "claude-sonnet-4-20250514"
+              : s.provider === "chatgpt-oauth"
+                ? CHATGPT_OAUTH_DEFAULT_MODEL
+                : "gpt-4o",
+          )
+          .onChange((value) => { customModelId = value.trim(); })
+      )
+      .addButton((btn) =>
+        btn.setButtonText("Add").onClick(() => {
+          if (!customModelId) return;
+          const existing = modelCache.get(s.provider) || [...(FALLBACK_MODELS[s.provider] ?? [])];
+          if (!existing.some((m) => m.value === customModelId)) {
+            existing.push({ value: customModelId, label: customModelId });
+            modelCache.set(s.provider, existing);
+          }
+          new Notice(`Added ${customModelId} to ${s.provider}'s catalog.`);
+          customModelId = "";
+          this.display();
+        })
+      );
   }
 }
 

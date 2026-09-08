@@ -3,18 +3,21 @@ import { mount, unmount } from "svelte";
 import type { Component } from "svelte";
 import type ChatPlugin from "../main";
 import ChatContainer from "./ChatContainer.svelte";
-import type { ToolResult, SelectionScope } from "../types";
+import type { ToolResult, SelectionScope, Provider } from "../types";
 import type { ContextRef } from "../context/refs";
 import { ImageIngestService } from "../context/image-ingest";
-import { getModelDisplayName } from "../settings";
+import { getModelDisplayName, getModelOptions } from "../settings";
 import { deriveDisplayHistory } from "../sessions/display-history";
 import type { SessionRuntimeEvent, SessionRuntimeSnapshot } from "../sessions/runtime/types";
 import { SessionSwitcherModal } from "./session-switcher-modal";
 import { observePaneLayout } from "./responsive/pane-layout";
 import { getChattingProviderState } from "../sessions/metadata/types";
-import { buildTurnModelCatalog } from "../turn-execution/catalog";
 import { normalizeProvider, normalizeReasoningEffort, sameTurnExecution } from "../turn-execution/selection";
 import type { TurnExecutionConfig } from "../turn-execution/types";
+import { getModelCapabilities, type ReasoningEffort } from "../model/capabilities";
+import { buildComposerModelOptions, buildReasoningOptions, type ComposerCatalogHost } from "../model-selection/catalog";
+import type { ComposerModelOption, ComposerReasoningOption } from "../model-selection/types";
+import { ComposerSelectionCoordinator, type SelectionDraft } from "../model-selection/selection-coordinator";
 
 export const VIEW_TYPE_CHAT = "ochatting-view";
 
@@ -28,7 +31,8 @@ interface ChatContainerProps {
   onReload: () => void;
   onStop: () => void;
   onAttachFiles: (files: File[]) => Promise<void>;
-  onModelChange: (model: string) => void;
+  /** Claudian-style composer selection (branch 14): always edits the NEXT send. */
+  onModelChange: (providerId: string, model: string) => void;
   onReasoningChange: (effort: string) => void;
 }
 
@@ -46,9 +50,11 @@ interface ChatContainerApi extends Record<string, unknown> {
   focus(): void;
   setModel(name: string): void;
   setNextTurnSelection(
-    models: { value: string; label: string }[],
+    modelOptions: ComposerModelOption[],
+    selectedProviderId: string,
     selectedModel: string,
-    reasoningEfforts: string[],
+    allowProviderSwitch: boolean,
+    reasoningOptions: ComposerReasoningOption[],
     selectedReasoningEffort: string | undefined,
     pendingDiffersFromActive: boolean,
   ): void;
@@ -95,6 +101,14 @@ export class ObsidianChatView extends ItemView {
    * and is never read back from here.
    */
   private activeTurnSelection: TurnExecutionConfig | null = null;
+  private closed = false;
+  /**
+   * Per-composer latest-wins ordering for overlapping local picker
+   * interactions (Session Workspaces v4.3, branch 14 / CLAUDIAN_PARITY.md
+   * item 5). A stale async selection request completing after a newer one
+   * must not clobber the newer choice's UI/persisted state.
+   */
+  private readonly selectionCoordinator: ComposerSelectionCoordinator;
 
   private sessionBarTitleEl: HTMLElement | undefined;
 
@@ -117,6 +131,30 @@ export class ObsidianChatView extends ItemView {
     super(leaf);
     this.plugin = plugin;
     this.imageIngest = new ImageIngestService(this.app);
+    this.selectionCoordinator = new ComposerSelectionCoordinator({
+      isOwnerLive: () => !this.closed && !!this.chatContainer,
+      readDraft: () => this.currentSelectionDraft(),
+      applyDraft: (next) => this.pushSelectorState(
+        { provider: next.providerId, model: next.model, reasoningEffort: next.reasoningEffort },
+        this.currentAllowProviderSwitch(),
+      ),
+      restoreDraft: (previous) => this.pushSelectorState(
+        { provider: previous.providerId, model: previous.model, reasoningEffort: previous.reasoningEffort },
+        this.currentAllowProviderSwitch(),
+      ),
+      // No separate provider-runtime initialization is needed: main.ts's
+      // buildAgentFactory resolves provider/credentials fresh from the
+      // admitted TurnExecutionConfig on every turn (see applyTurnExecution).
+      initializeProvider: async () => { /* no-op */ },
+      persistSelection: async (next) => {
+        if (!this.boundSessionId) return;
+        await this.plugin.sessionManager.setNextTurnSelection(this.boundSessionId, {
+          provider: next.providerId,
+          model: next.model,
+          ...(next.reasoningEffort ? { reasoningEffort: next.reasoningEffort } : {}),
+        });
+      },
+    });
   }
 
   getViewType(): string {
@@ -182,9 +220,8 @@ export class ObsidianChatView extends ItemView {
           onReload: () => void this.handleReload(),
           onStop: () => void this.handleStop(),
           onAttachFiles: (files: File[]) => this.handleAttachFiles(files),
-          onModelChange: (model: string) => void this.handleTurnSelectionChange({ model }),
-          onReasoningChange: (effort: string) =>
-            void this.handleTurnSelectionChange({ reasoningEffort: normalizeReasoningEffort(effort) }),
+          onModelChange: (providerId: string, model: string) => void this.handleModelChange(providerId, model),
+          onReasoningChange: (effort: string) => void this.handleReasoningChange(effort),
         },
       },
     );
@@ -195,6 +232,7 @@ export class ObsidianChatView extends ItemView {
   }
 
   async onClose(): Promise<void> {
+    this.closed = true;
     this.stopPaneLayoutObserver?.();
     this.stopPaneLayoutObserver = undefined;
     this.runtimeUnsubscribe?.();
@@ -392,6 +430,14 @@ export class ObsidianChatView extends ItemView {
    * resolveNextTurnExecution). Used only to drive the composer selector's
    * displayed value; the authoritative admission logic lives server-side.
    */
+  private lastKnownSnapshot: SessionRuntimeSnapshot | undefined;
+
+  /**
+   * Client-side mirror of SessionManager's turn-selection fallback (see
+   * main.ts's getTurnSelectionFallback / turn-execution/selection.ts's
+   * resolveNextTurnExecution). Used only to drive the composer selector's
+   * displayed value; the authoritative admission logic lives server-side.
+   */
   private resolveDisplaySelection(snapshot: SessionRuntimeSnapshot): TurnExecutionConfig {
     const state = getChattingProviderState(snapshot.metadata);
     const provider = normalizeProvider(state.upstreamProvider) ?? this.plugin.settings.provider;
@@ -400,43 +446,109 @@ export class ObsidianChatView extends ItemView {
     return { provider, model, ...(reasoningEffort ? { reasoningEffort } : {}) };
   }
 
-  private refreshTurnSelector(snapshot: SessionRuntimeSnapshot): void {
+  private currentSelectionDraft(): SelectionDraft {
+    if (!this.lastKnownSnapshot) return { providerId: this.plugin.settings.provider, model: "" };
+    const current = this.resolveDisplaySelection(this.lastKnownSnapshot);
+    return { providerId: current.provider, model: current.model, reasoningEffort: current.reasoningEffort };
+  }
+
+  /**
+   * Claudian parity: a still-pristine conversation (no persisted messages
+   * yet) may switch upstream provider through the model picker. Mirrors
+   * (client-side only; SessionManager.setNextTurnSelection recomputes this
+   * itself from the derived index before enforcing it) the messageCount===0
+   * rule from MERGE_INSTRUCTIONS.md §4.
+   */
+  private currentAllowProviderSwitch(): boolean {
+    return (this.lastKnownSnapshot?.messages.length ?? 0) === 0;
+  }
+
+  private composerCatalogHost(): ComposerCatalogHost {
+    return {
+      getEnabledProviders: () => this.plugin.getEnabledProviders(),
+      getProviderLabel: (provider) => this.plugin.getProviderLabel(provider),
+      getModels: (provider) => getModelOptions(provider),
+      getReasoningEfforts: (provider, model) => {
+        const capabilities = getModelCapabilities(provider, model);
+        return capabilities.reasoning.supported
+          ? (["auto", "low", "medium", "high", "max"] as const)
+          : [];
+      },
+    };
+  }
+
+  private pushSelectorState(pending: TurnExecutionConfig, allowProviderSwitch: boolean): void {
     const chat = this.chatContainer;
     if (!chat) return;
-    const pending = this.resolveDisplaySelection(snapshot);
-    const catalog = buildTurnModelCatalog(pending.provider, pending.model);
+    const host = this.composerCatalogHost();
+    const modelOptions = buildComposerModelOptions(host, pending.provider, allowProviderSwitch);
+    const reasoningOptions = buildReasoningOptions(host, pending.provider, pending.model);
     const pendingDiffersFromActive = !!this.activeTurnSelection
       && !sameTurnExecution(this.activeTurnSelection, pending);
     chat.setNextTurnSelection(
-      catalog.models,
+      modelOptions,
+      pending.provider,
       pending.model,
-      catalog.reasoningEfforts,
+      allowProviderSwitch,
+      reasoningOptions,
       pending.reasoningEffort,
       pendingDiffersFromActive,
     );
     chat.setModel(getModelDisplayName(pending.provider, pending.model));
   }
 
+  private refreshTurnSelector(snapshot: SessionRuntimeSnapshot): void {
+    this.pushSelectorState(this.resolveDisplaySelection(snapshot), this.currentAllowProviderSwitch());
+  }
+
   /**
-   * Handles a composer selector change. Always targets the session's
-   * NEXT-turn selection (SessionManager.setNextTurnSelection); intentionally
-   * allowed while a turn is running or queued — see runtime/manager.ts and
-   * SEMANTICS.md invariant 8. Never touches plugin-global settings and never
-   * aborts/restarts the runtime.
+   * Handles an explicit composer model pick. Routed through
+   * ComposerSelectionCoordinator for local latest-wins ordering (an
+   * overlapping earlier request must not clobber a newer one), then — only
+   * if this request is still the current one after successful persistence —
+   * commits the choice to the app-wide `lastSelectedChatModel` seed via
+   * ModelSelectionSeedCoordinator, which has its own latest-wins ordering so
+   * a slow async completion can't roll back a newer explicit choice.
    */
-  private async handleTurnSelectionChange(patch: Partial<TurnExecutionConfig>): Promise<void> {
-    const sessionId = this.boundSessionId;
-    if (!sessionId || !this.lastKnownSnapshot) return;
+  private async handleModelChange(providerId: string, model: string): Promise<void> {
+    if (!this.boundSessionId || !this.lastKnownSnapshot) return;
     const current = this.resolveDisplaySelection(this.lastKnownSnapshot);
-    const next: TurnExecutionConfig = { ...current, ...patch };
+    const target: SelectionDraft = {
+      providerId: (normalizeProvider(providerId) ?? current.provider),
+      model,
+      reasoningEffort: current.reasoningEffort,
+    };
+    await this.runSelectionRequest(target);
+  }
+
+  private async handleReasoningChange(effort: string): Promise<void> {
+    if (!this.boundSessionId || !this.lastKnownSnapshot) return;
+    const current = this.resolveDisplaySelection(this.lastKnownSnapshot);
+    const target: SelectionDraft = {
+      providerId: current.provider,
+      model: current.model,
+      reasoningEffort: normalizeReasoningEffort(effort),
+    };
+    await this.runSelectionRequest(target);
+  }
+
+  private async runSelectionRequest(target: SelectionDraft): Promise<void> {
+    const request = this.selectionCoordinator.beginRequest();
     try {
-      await this.plugin.sessionManager.setNextTurnSelection(sessionId, next);
+      const result = await this.selectionCoordinator.select(request, target, {
+        allowProviderSwitch: this.currentAllowProviderSwitch(),
+      });
+      if (result.status !== "succeeded") return;
+      const intent = this.plugin.modelSelectionSeedCoordinator.beginIntent();
+      await this.plugin.modelSelectionSeedCoordinator.commitIntent(
+        intent,
+        { providerId: target.providerId, model: target.model },
+        () => result.isCurrent(),
+      );
     } catch (e) {
       new Notice(e instanceof Error ? e.message : String(e));
     }
   }
-
-  private lastKnownSnapshot: SessionRuntimeSnapshot | undefined;
 
   private renderSnapshot(snapshot: SessionRuntimeSnapshot): void {
     const chat = this.chatContainer;

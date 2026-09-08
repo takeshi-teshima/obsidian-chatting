@@ -29,26 +29,30 @@ export function resolveNextTurnExecution(
 
 /**
  * Updates the session's *next-turn* selection without changing its logical
- * Chatting provider identity. Existing conversations may switch model and
- * reasoning effort, but not upstream provider through this control.
+ * Chatting provider identity by default. Existing conversations may switch
+ * model and reasoning effort, but not upstream provider, through this
+ * control.
  *
- * `allowProviderSwitch` (added for branch 14's pristine-conversation rule;
- * defaults to false so branch 13 alone never allows a provider change here)
- * lets a still-empty (messageCount === 0) conversation pick any enabled
- * provider's model. Once the conversation is bound to a provider, the
- * cross-provider attempt is rejected with a recoverable error rather than
- * silently mutating the session's provider identity.
+ * `options.allowProviderSwitch` (branch 14's pristine-conversation rule;
+ * defaults to false so branch 13's own callers never allow a provider
+ * change) lets a still-empty (messageCount === 0) conversation pick any
+ * enabled provider's model. Once the conversation is bound to a provider
+ * (first persisted message), the cross-provider attempt is rejected with a
+ * recoverable error rather than silently mutating the session's provider
+ * identity — see SessionManager.setNextTurnSelection(), which is the only
+ * caller allowed to compute `allowProviderSwitch` from
+ * `ConversationMeta.messageCount === 0`.
  */
 export function applyNextTurnSelection(
   metadata: SessionMetadata,
   selection: TurnExecutionConfig,
-  allowProviderSwitch = false,
+  options: { allowProviderSwitch?: boolean } = {},
 ): SessionMetadata {
   const state = getChattingProviderState(metadata);
   const existingProvider = normalizeProvider(state.upstreamProvider);
-  if (existingProvider && existingProvider !== selection.provider && !allowProviderSwitch) {
+  if (existingProvider && existingProvider !== selection.provider && options.allowProviderSwitch !== true) {
     throw new Error(
-      `This conversation uses ${existingProvider}; create or fork a conversation to switch provider.`,
+      `This conversation uses ${existingProvider}; start or fork a conversation to switch provider.`,
     );
   }
   const model = selection.model.trim();

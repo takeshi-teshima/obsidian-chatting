@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 import * as path from "node:path";
 import * as os from "node:os";
 import * as fs from "node:fs/promises";
+import { spawn } from "node:child_process";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const checkFiles = [
@@ -16,6 +17,7 @@ const checkFiles = [
   "concurrency.check.ts",
   "turn-model-selection.check.ts",
   "agent-loop-adapter.check.ts",
+  "model-selection.check.ts",
 ];
 
 let anyFailed = false;
@@ -32,16 +34,21 @@ for (const file of checkFiles) {
     loader: { ".json": "json" },
   });
 
-  const before = process.exitCode;
-  process.exitCode = undefined;
-  await import(outfile).catch(async (e) => {
-    // If the module has no default export (it's a script with side effects),
-    // importing it is enough to execute main().
-    if (e instanceof Error && e.message.includes("does not provide")) return;
-    throw e;
+  // Run each check in its OWN node process (own event loop), not via
+  // dynamic import() in this shared process. Each check's `main()` is
+  // fire-and-forget (`void main()`) internally, so awaiting import() alone
+  // only waits for synchronous module evaluation, not for main() to finish
+  // — with multiple check files that made their async work (timers, fs I/O)
+  // interleave across files and race, occasionally flipping real assertions
+  // (e.g. a queued-turn admission check) purely from cross-file scheduling
+  // noise, not from an actual bug in the code under test. A subprocess per
+  // file gives each check an isolated event loop and a real exit code to
+  // await.
+  const exitCode = await new Promise((resolve) => {
+    const child = spawn(process.execPath, [outfile], { stdio: "inherit" });
+    child.on("exit", (code) => resolve(code ?? 1));
   });
-  if (process.exitCode) anyFailed = true;
-  process.exitCode = before;
+  if (exitCode !== 0) anyFailed = true;
 
   await fs.rm(outfile, { force: true });
 }
