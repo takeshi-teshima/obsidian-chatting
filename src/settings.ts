@@ -103,6 +103,23 @@ export class ChatSettingTab extends PluginSettingTab {
           })
       );
 
+    // ─── Send on Enter ──────────────────────────────────────────────────
+    new Setting(containerEl)
+      .setName("Send on Enter")
+      .setDesc(
+        "Off (default): Enter inserts a newline like a normal text box; use Cmd+Enter (macOS) " +
+          "or Ctrl+Enter (Windows/Linux) to send. On: Enter sends the message and Shift+Enter " +
+          "inserts a newline instead."
+      )
+      .addToggle((toggle) =>
+        toggle
+          .setValue(s.sendOnEnter)
+          .onChange(async (value) => {
+            s.sendOnEnter = value;
+            await this.plugin.saveSettings();
+          })
+      );
+
     // ─── Max iterations ───────────────────────────────────────────────
     new Setting(containerEl)
       .setName("Max tool iterations")
