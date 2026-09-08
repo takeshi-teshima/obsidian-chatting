@@ -7,8 +7,12 @@ import type {
   SelectionScope,
 } from "../types";
 import { sendMessage } from "../api/client";
-import { clearOpenAIState } from "../api/openai";
 import { clearChatGPTOAuthState } from "../api/chatgpt-oauth";
+import {
+  createProviderConversationState,
+  resetProviderConversationState,
+  type ProviderConversationState,
+} from "../api/provider-session-state";
 import { TOOL_DEFINITIONS } from "../tools/registry";
 import { executeTool } from "../tools/executor";
 import { buildContext } from "./context";
@@ -54,13 +58,21 @@ export class AgentLoop {
   private skills: SkillService;
   private profiles: PromptProfileService;
   private readonly imageResolver: VaultImageResolver;
+  /**
+   * Mutable per-instance provider conversation state (e.g. OpenAI's
+   * `previous_response_id`). Each AgentLoop instance belongs to exactly one
+   * SessionRuntime, so this state is inherently session-local — never a
+   * module-level global. See src/api/provider-session-state.ts.
+   */
+  private readonly providerState: ProviderConversationState;
 
-  constructor(app: App, settings: ChatSettings) {
+  constructor(app: App, settings: ChatSettings, providerState?: ProviderConversationState) {
     this.app = app;
     this.settings = settings;
     this.skills = new SkillService(app);
     this.profiles = new PromptProfileService(app);
     this.imageResolver = new VaultImageResolver(app);
+    this.providerState = providerState ?? createProviderConversationState();
   }
 
   /** Abort a running loop (e.g. user navigates away) */
@@ -72,8 +84,18 @@ export class AgentLoop {
   clear(): void {
     this.messages = [];
     this.aborted = false;
-    clearOpenAIState();
+    resetProviderConversationState(this.providerState);
     clearChatGPTOAuthState();
+  }
+
+  /**
+   * Reset only this instance's server-side provider continuation state
+   * (e.g. after hydrating a persisted session — there is no trusted
+   * `previous_response_id` for a run that didn't originate in this process).
+   * Unlike clear(), this does not touch conversation history.
+   */
+  resetProviderContinuation(): void {
+    resetProviderConversationState(this.providerState);
   }
 
   /** Export API messages for persistence */
@@ -254,7 +276,7 @@ export class AgentLoop {
           this.messages,
           TOOL_DEFINITIONS,
           systemPrompt,
-          { images: this.imageResolver }
+          { images: this.imageResolver, providerState: this.providerState }
         );
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);

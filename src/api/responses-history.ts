@@ -3,38 +3,25 @@ import type { ImageResolver } from "../context/image-resolver";
 import { buildResponsesVisionContent } from "./vision";
 
 /**
- * Serialize the provider-neutral conversation into Responses API input items.
- *
- * Used when there is no safe server continuation id (OpenAI after restore /
- * session switch) and by ChatGPT OAuth/Codex, which always runs store:false.
+ * Rebuild Responses API history when a SessionRuntime has no trusted server-side
+ * continuation ID (first request after hydration/restart, or ChatGPT OAuth store:false).
  */
 export async function buildResponsesHistoryInput(
   messages: readonly UnifiedMessage[],
   imageResolver?: ImageResolver,
 ): Promise<Array<Record<string, unknown>>> {
   const items: Array<Record<string, unknown>> = [];
-
   for (const message of messages) {
     const role = message.role === "assistant" ? "assistant" : "user";
-
     if (typeof message.content === "string") {
       if (message.role === "user") {
         const vision = await buildResponsesVisionContent(message, imageResolver);
-        items.push({
-          type: "message",
-          role: "user",
-          content: vision ?? message.content,
-        });
+        items.push({ type: "message", role: "user", content: vision ?? message.content });
       } else {
-        items.push({
-          type: "message",
-          role: "assistant",
-          content: message.content,
-        });
+        items.push({ type: "message", role: "assistant", content: message.content });
       }
       continue;
     }
-
     for (const block of message.content) {
       if (block.type === "text" && block.text) {
         items.push({ type: "message", role, content: block.text });
@@ -54,6 +41,5 @@ export async function buildResponsesHistoryInput(
       }
     }
   }
-
   return items;
 }

@@ -6,6 +6,36 @@
   import { parsePdfMention, buildPdfScopedContext, choosePdf } from "../context/pdf-mention";
   import { parseImageMention, buildImageScopedContext, chooseImage } from "../context/image-mention";
   import { mergeContextRefs, contextRefLabel } from "../context/ref-list";
+  import SessionSwitcher from "./session/SessionSwitcher.svelte";
+  import SessionBrowser from "./session/SessionBrowser.svelte";
+  import SessionTabStrip from "./session/SessionTabStrip.svelte";
+  import type { SessionQueryResult, SessionRunPhase } from "../session/types";
+
+  export interface SessionBrowserProps {
+    result: SessionQueryResult;
+    currentSessionId: string | null;
+    scope: "active" | "pinned" | "archived";
+    search: string;
+    sort: "activity" | "created";
+    runtimePhases: ReadonlyMap<string, SessionRunPhase>;
+    activeCount: number;
+    pinnedCount: number;
+    archivedCount: number;
+    onScope: (scope: "active" | "pinned" | "archived") => void;
+    onSearch: (value: string) => void;
+    onSort: (sort: "activity" | "created") => void;
+    onOpen: (id: string) => void;
+    onNew: () => void;
+    onLoadMore: () => void;
+    onActions: (id: string, event: MouseEvent) => void;
+  }
+
+  export interface SessionTabItem {
+    id: string;
+    title: string;
+    phase: SessionRunPhase;
+    unread: boolean;
+  }
 
   interface ChatMessage {
     id: number;
@@ -27,9 +57,48 @@
     onStop: () => void;
     /** Copies device/pasted image files into the vault and reports back ContextRefs + per-file errors. */
     onAttachFiles: (files: File[]) => Promise<void>;
+    /** Session Workspaces: header session switcher + tab strip wiring. All optional so this component keeps working if a host never binds a session. */
+    sessionTitle?: string;
+    sessionPhase?: SessionRunPhase;
+    sessionHasUnread?: boolean;
+    onOpenSessionBrowser?: () => void;
+    onNewSession?: () => void;
+    onSessionMenu?: (event: MouseEvent) => void;
+    tabs?: SessionTabItem[];
+    currentSessionId?: string | null;
+    onSelectTab?: (id: string) => void;
+    onCloseTab?: (id: string) => void;
   }
 
-  let { app, component, provider, model, onSend, onClear, onReload, onStop, onAttachFiles }: Props = $props();
+  let {
+    app, component, provider, model, onSend, onClear, onReload, onStop, onAttachFiles,
+    sessionTitle: initialSessionTitle = "", sessionPhase: initialSessionPhase = "idle", sessionHasUnread: initialSessionHasUnread = false,
+    onOpenSessionBrowser = () => {}, onNewSession = () => {}, onSessionMenu = () => {},
+    tabs: initialTabs = [], currentSessionId: initialCurrentSessionId = null, onSelectTab = () => {}, onCloseTab = () => {},
+  }: Props = $props();
+
+  // These start from props but are updated post-mount via exported setters
+  // (setSessionHeader/setTabs), since the host (chat-view.ts) mounts this
+  // component once per pane and then drives it through the runtime's event
+  // stream rather than remounting on every session switch.
+  let sessionTitle = $state(initialSessionTitle);
+  let sessionPhase = $state<SessionRunPhase>(initialSessionPhase);
+  let sessionHasUnread = $state(initialSessionHasUnread);
+  let tabs = $state<SessionTabItem[]>(initialTabs);
+  let currentSessionId = $state<string | null>(initialCurrentSessionId);
+
+  export function setSessionHeader(title: string, phase: SessionRunPhase, hasUnread: boolean): void {
+    sessionTitle = title;
+    sessionPhase = phase;
+    sessionHasUnread = hasUnread;
+  }
+
+  export function setTabs(nextTabs: SessionTabItem[], nextCurrentSessionId: string | null): void {
+    tabs = nextTabs;
+    currentSessionId = nextCurrentSessionId;
+  }
+
+  let browserProps = $state<SessionBrowserProps | null>(null);
 
   const SUPPORTED_PASTE_MIME = ["image/jpeg", "image/png", "image/webp", "image/gif"];
   let fileInputEl: HTMLInputElement | undefined = $state();
@@ -181,6 +250,35 @@
   /** Clear the selection scope */
   export function clearSelection(): void {
     selection = null;
+  }
+
+  // ─── Session Workspaces: browser overlay + draft passthrough ──────────
+
+  export function showSessionBrowser(props: SessionBrowserProps): void {
+    browserProps = props;
+  }
+
+  export function updateSessionBrowser(patch: Partial<SessionBrowserProps>): void {
+    if (browserProps) browserProps = { ...browserProps, ...patch };
+  }
+
+  export function hideSessionBrowser(): void {
+    browserProps = null;
+  }
+
+  export function isSessionBrowserOpen(): boolean {
+    return browserProps !== null;
+  }
+
+  /** Current composer draft (text + attached context refs), for SessionManager.setDraftForView. */
+  export function getDraft(): { text: string; contextRefs: ContextRef[] } {
+    return { text: inputText, contextRefs: [...contextRefs] };
+  }
+
+  /** Restore a previously saved draft when switching back into a session. */
+  export function setDraft(text: string, refs: ContextRef[]): void {
+    inputText = text;
+    contextRefs = [...refs];
   }
 
   // ─── Internal handlers ────────────────────────────────────────────────
@@ -347,15 +445,37 @@
 </script>
 
 <div class="ochatting-container">
+  <!-- Session tab strip (wide desktop only; hidden on mobile via CSS) -->
+  {#if tabs.length > 0}
+    <SessionTabStrip {tabs} {currentSessionId} onSelect={onSelectTab} onClose={onCloseTab} onNew={onNewSession} />
+  {/if}
+
   <!-- Header -->
   <div class="ochatting-header">
     <div class="ochatting-header-left">
-      <span class="ochatting-header-title">Chat</span>
+      <SessionSwitcher
+        title={sessionTitle}
+        phase={sessionPhase}
+        hasUnreadActivity={sessionHasUnread}
+        onOpenBrowser={onOpenSessionBrowser}
+        onNewSession={onNewSession}
+        onMore={onSessionMenu}
+      />
       <span class="ochatting-header-model">{displayModel || "No model"}</span>
     </div>
     <button class="ochatting-clear-btn" onclick={onClear}>Clear</button>
     <button class="ochatting-clear-btn ochatting-reload-btn" onclick={onReload}>Reload</button>
   </div>
+
+  <!-- Session browser overlay (mobile/narrow sheet; also used as the desktop popover) -->
+  {#if browserProps}
+    <div class="cw-session-overlay" role="presentation" onclick={(e) => { if (e.target === e.currentTarget) hideSessionBrowser(); }}>
+      <div class="cw-session-overlay-panel">
+        <button class="cw-session-overlay-close" type="button" aria-label="Close" onclick={() => hideSessionBrowser()}>×</button>
+        <SessionBrowser {...browserProps} />
+      </div>
+    </div>
+  {/if}
 
   <!-- Messages -->
   <div class="ochatting-messages" bind:this={messagesEl}>
@@ -544,6 +664,7 @@
 <style>
   /* ─── Container ─────────────────────────────────────────────────────── */
   .ochatting-container {
+    position: relative;
     display: flex;
     flex-direction: column;
     height: 100%;
@@ -564,12 +685,6 @@
     display: flex;
     align-items: baseline;
     gap: 8px;
-  }
-
-  .ochatting-header-title {
-    font-weight: var(--font-weight-bold, 600);
-    font-size: var(--font-ui-medium);
-    color: var(--text-normal);
   }
 
   .ochatting-header-model {
@@ -903,6 +1018,39 @@
   .ochatting-selection-dismiss:hover {
     background: var(--background-modifier-border);
     color: var(--text-normal);
+  }
+
+  /* ─── Session browser overlay ──────────────────────────────────────── */
+  .cw-session-overlay {
+    position: absolute;
+    inset: 0;
+    z-index: 20;
+    background: rgba(0, 0, 0, 0.35);
+    display: flex;
+    justify-content: flex-start;
+  }
+
+  .cw-session-overlay-panel {
+    position: relative;
+    width: min(360px, 92vw);
+    height: 100%;
+    background: var(--background-primary);
+    box-shadow: 2px 0 10px rgba(0, 0, 0, 0.2);
+    overflow: hidden;
+  }
+
+  .cw-session-overlay-close {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    z-index: 1;
+    width: 26px;
+    height: 26px;
+    border: 0;
+    border-radius: 50%;
+    background: var(--background-modifier-hover);
+    color: var(--text-muted);
+    cursor: pointer;
   }
 
   /* ─── Responsive ────────────────────────────────────────────────────── */

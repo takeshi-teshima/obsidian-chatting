@@ -1,13 +1,30 @@
-import type { UnifiedMessage, ToolResult } from "../types";
+import type { UnifiedMessage, ToolResult, Provider, SelectionScope } from "../types";
 import type { ContextRef } from "../context/refs";
-import { isContextRef } from "../context/refs";
 import type { ReasoningEffort } from "../model/reasoning";
 
-export const SESSION_SCHEMA_VERSION = 1 as const;
-export const SESSION_INDEX_SCHEMA_VERSION = 1 as const;
+export const SESSION_SCHEMA_VERSION = 3 as const;
+export const SESSION_CATALOG_VERSION = 4 as const;
+export const SESSION_MANIFEST_VERSION = 4 as const;
+export const SESSION_CATALOG_SHARDS = 64 as const;
+export const SESSION_HOT_RECENT_LIMIT = 512 as const;
+
+export type SessionRunPhase =
+  | "idle"
+  | "queued"
+  | "running"
+  | "waiting_user"
+  | "stopping";
+
+export type SessionRunOutcome =
+  | "completed"
+  | "stopped"
+  | "error"
+  | "interrupted";
 
 export interface ChatHistoryEntry {
+  id: string;
   type: "user" | "assistant" | "tool-result" | "error";
+  timestamp: number;
   text?: string;
   contextRefs?: ContextRef[];
   toolName?: string;
@@ -15,155 +32,214 @@ export interface ChatHistoryEntry {
   toolResult?: ToolResult;
 }
 
-export interface SessionMetadata {
-  id: string;
-  title: string;
-  createdAt: number;
-  updatedAt: number;
+export interface SessionDraft {
+  text: string;
+  contextRefs: ContextRef[];
+}
+
+export interface SessionPreferences {
+  /** Conversation-owned provider. Secrets remain in SecretStorage. */
+  provider: Provider;
+  /** Conversation-owned model selection. */
+  model: string;
   profileId?: string;
   effortOverride?: ReasoningEffort;
 }
 
-export interface PersistedSession extends SessionMetadata {
+export interface SessionForkSource {
+  sessionId: string;
+  /** Number of chat history entries retained in the fork. Omitted for full clone. */
+  historyLength?: number;
+}
+
+export interface SessionRecoveryMarker {
+  phase: "running" | "waiting_user";
+  startedAt: number;
+  updatedAt: number;
+  pendingQuestion?: string;
+}
+
+/**
+ * Lightweight metadata used by the session browser. Do not put full messages here.
+ * Keeping this record compact is what makes thousands of sessions cheap to browse.
+ */
+export interface SessionSummary {
+  id: string;
+  revision: number;
+  title: string;
+  createdAt: number;
+  lastActivityAt: number;
+  messageCount: number;
+  preview: string;
+  preferences: SessionPreferences;
+  isPinned: boolean;
+  isArchived: boolean;
+  hasUnreadActivity: boolean;
+  lastOutcome?: SessionRunOutcome;
+  lastError?: string;
+  forkedFrom?: SessionForkSource;
+}
+
+export interface PersistedSession extends SessionSummary {
   schemaVersion: typeof SESSION_SCHEMA_VERSION;
   chatHistory: ChatHistoryEntry[];
   agentMessages: UnifiedMessage[];
+  draft: SessionDraft;
+  /**
+   * Written only at lifecycle boundaries. If present after restart, the prior run
+   * did not finish cleanly and must be surfaced as interrupted, never resumed blindly.
+   */
+  recovery?: SessionRecoveryMarker;
 }
 
-export interface SessionIndex {
-  schemaVersion: typeof SESSION_INDEX_SCHEMA_VERSION;
-  activeSessionId: string | null;
-  sessions: SessionMetadata[];
+export interface SessionCatalog {
+  schemaVersion: typeof SESSION_CATALOG_VERSION;
+  generation: number;
+  sessions: SessionSummary[];
+}
+
+export interface SessionManifest {
+  schemaVersion: typeof SESSION_MANIFEST_VERSION;
+  generation: number;
+  /** Total non-archived sessions. Available without hydrating catalog shards. */
+  activeCount: number;
+  /** Total archived sessions. Available without hydrating archive metadata. */
+  archivedCount: number;
+  /** Total pinned, non-archived sessions. */
+  pinnedCount: number;
+  shardCount: typeof SESSION_CATALOG_SHARDS;
+  hotRecentLimit: typeof SESSION_HOT_RECENT_LIMIT;
+  /** A removal from the hot window may leave it underfilled until a maintenance refill. */
+  hotNeedsRefill?: boolean;
+  legacyImportedAt?: number;
+  lastRebuildAt?: number;
+}
+
+export interface SessionStoreStats {
+  activeCount: number;
+  archivedCount: number;
+  pinnedCount: number;
+}
+
+export interface SessionRunRequest {
+  text: string;
+  contextRefs?: ContextRef[];
+  selection?: SelectionScope | null;
+}
+
+export interface SessionRuntimeSnapshot {
+  session: PersistedSession;
+  phase: SessionRunPhase;
+  pendingQuestion: string | null;
+  queuedAt: number | null;
+}
+
+export type SessionRuntimeEvent =
+  | { type: "snapshot"; snapshot: SessionRuntimeSnapshot }
+  | { type: "thinking" }
+  | { type: "tool-call"; name: string; input: Record<string, unknown> }
+  | { type: "tool-result"; name: string; result: ToolResult }
+  | { type: "assistant"; text: string }
+  | { type: "ask-user"; question: string }
+  | { type: "run-state"; phase: SessionRunPhase }
+  | { type: "run-complete"; outcome: SessionRunOutcome }
+  | { type: "error"; message: string };
+
+export interface SessionQuery {
+  scope: "active" | "pinned" | "archived";
+  search?: string;
+  sort?: "activity" | "created";
+  offset?: number;
+  limit?: number;
+}
+
+export interface SessionQueryResult {
+  items: SessionSummary[];
+  total: number;
+  offset: number;
+  nextOffset: number | null;
 }
 
 export interface LegacyChatState {
-  chatHistory?: ChatHistoryEntry[];
+  chatHistory?: Array<Partial<ChatHistoryEntry> & { type: ChatHistoryEntry["type"] }>;
   agentMessages?: UnifiedMessage[];
-}
-
-export const VALID_SESSION_EFFORTS = new Set<ReasoningEffort>([
-  "auto",
-  "low",
-  "medium",
-  "high",
-  "max",
-]);
-
-export function isPersistedSession(value: unknown): value is PersistedSession {
-  if (!isRecord(value)) return false;
-  if (value.schemaVersion !== SESSION_SCHEMA_VERSION) return false;
-  if (!isSessionMetadata(value)) return false;
-  if (!Array.isArray(value.chatHistory) || !value.chatHistory.every(isChatHistoryEntry)) return false;
-  if (!Array.isArray(value.agentMessages) || !value.agentMessages.every(isUnifiedMessage)) return false;
-  return true;
-}
-
-export function isSessionIndex(value: unknown): value is SessionIndex {
-  if (!isRecord(value) || value.schemaVersion !== SESSION_INDEX_SCHEMA_VERSION) return false;
-  if (value.activeSessionId !== null && typeof value.activeSessionId !== "string") return false;
-  return Array.isArray(value.sessions) && value.sessions.every(isSessionMetadata);
-}
-
-export function isLegacyChatState(value: unknown): value is LegacyChatState {
-  if (!isRecord(value)) return false;
-  if (value.chatHistory !== undefined && (!Array.isArray(value.chatHistory) || !value.chatHistory.every(isChatHistoryEntry))) return false;
-  if (value.agentMessages !== undefined && (!Array.isArray(value.agentMessages) || !value.agentMessages.every(isUnifiedMessage))) return false;
-  return value.chatHistory !== undefined || value.agentMessages !== undefined;
-}
-
-export function deriveSessionTitle(history: readonly ChatHistoryEntry[]): string {
-  const firstUser = history.find((entry) => entry.type === "user" && typeof entry.text === "string" && entry.text.trim());
-  if (!firstUser?.text) return "New chat";
-  const oneLine = firstUser.text.replace(/\s+/g, " ").trim();
-  if (oneLine.length <= 56) return oneLine;
-  return `${oneLine.slice(0, 53).trimEnd()}...`;
 }
 
 export function createSessionId(now = Date.now()): string {
   const random = typeof globalThis.crypto?.randomUUID === "function"
-    ? globalThis.crypto.randomUUID().replace(/-/g, "").slice(0, 12)
-    : Math.random().toString(36).slice(2, 14).padEnd(12, "0");
+    ? globalThis.crypto.randomUUID().replace(/-/g, "").slice(0, 16)
+    : `${Math.random().toString(36).slice(2)}${Math.random().toString(36).slice(2)}`.slice(0, 16);
   return `s_${now.toString(36)}_${random}`;
 }
 
-/** Reject browser binary objects/cycles before JSON.stringify silently erases them. */
-export function assertJsonSafe(value: unknown): void {
-  const seen = new Set<object>();
-  visit(value, "$", seen);
+export function createHistoryId(now = Date.now()): string {
+  const random = Math.random().toString(36).slice(2, 9);
+  return `m_${now.toString(36)}_${random}`;
 }
 
-function visit(value: unknown, path: string, seen: Set<object>): void {
-  if (value === null || value === undefined) return;
-  const type = typeof value;
-  if (type === "string" || type === "number" || type === "boolean") return;
-  if (type === "bigint" || type === "symbol" || type === "function") {
-    throw new Error(`Session state contains non-JSON value at ${path}`);
-  }
+export function deriveSessionTitle(history: readonly ChatHistoryEntry[]): string {
+  const first = history.find((entry) => entry.type === "user" && entry.text?.trim());
+  const source = first?.text?.replace(/\s+/g, " ").trim() ?? "";
+  if (!source) return "New chat";
+  return source.length <= 64 ? source : `${source.slice(0, 61).trimEnd()}...`;
+}
 
+export function deriveSessionPreview(history: readonly ChatHistoryEntry[]): string {
+  for (let i = history.length - 1; i >= 0; i--) {
+    const entry = history[i];
+    if ((entry.type === "user" || entry.type === "assistant") && entry.text?.trim()) {
+      const source = entry.text.replace(/\s+/g, " ").trim();
+      return source.length <= 120 ? source : `${source.slice(0, 117).trimEnd()}...`;
+    }
+  }
+  return "";
+}
+
+export function summaryOf(session: PersistedSession): SessionSummary {
+  const {
+    schemaVersion: _schemaVersion,
+    chatHistory: _chatHistory,
+    agentMessages: _agentMessages,
+    draft: _draft,
+    recovery: _recovery,
+    ...summary
+  } = session;
+  return {
+    ...summary,
+    lastError: summary.lastError
+      ? (summary.lastError.length <= 240 ? summary.lastError : `${summary.lastError.slice(0, 237)}...`)
+      : undefined,
+  };
+}
+
+export function assertJsonSafe(value: unknown): void {
+  const seen = new Set<object>();
+  visitJson(value, "$", seen);
+}
+
+function visitJson(value: unknown, path: string, seen: Set<object>): void {
+  if (value === null || value === undefined) return;
+  const kind = typeof value;
+  if (kind === "string" || kind === "number" || kind === "boolean") return;
+  if (kind === "bigint" || kind === "symbol" || kind === "function") {
+    throw new Error(`Session state contains a non-JSON value at ${path}`);
+  }
   if (value instanceof ArrayBuffer || ArrayBuffer.isView(value)) {
     throw new Error(`Session state contains binary data at ${path}`);
   }
   if (typeof Blob !== "undefined" && value instanceof Blob) {
     throw new Error(`Session state contains Blob data at ${path}`);
   }
-
   if (typeof value !== "object") return;
   const object = value as object;
   if (seen.has(object)) throw new Error(`Session state contains a cycle at ${path}`);
   seen.add(object);
   if (Array.isArray(value)) {
-    value.forEach((item, index) => visit(item, `${path}[${index}]`, seen));
+    value.forEach((item, index) => visitJson(item, `${path}[${index}]`, seen));
   } else {
     for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
-      visit(item, `${path}.${key}`, seen);
+      visitJson(item, `${path}.${key}`, seen);
     }
   }
   seen.delete(object);
-}
-
-function isSessionMetadata(value: unknown): value is SessionMetadata {
-  if (!isRecord(value)) return false;
-  if (typeof value.id !== "string" || !/^s_[a-z0-9_]+$/i.test(value.id)) return false;
-  if (typeof value.title !== "string") return false;
-  if (!finiteTimestamp(value.createdAt) || !finiteTimestamp(value.updatedAt)) return false;
-  if (value.profileId !== undefined && typeof value.profileId !== "string") return false;
-  if (value.effortOverride !== undefined && !VALID_SESSION_EFFORTS.has(value.effortOverride as ReasoningEffort)) return false;
-  return true;
-}
-
-function isChatHistoryEntry(value: unknown): value is ChatHistoryEntry {
-  if (!isRecord(value)) return false;
-  if (value.type !== "user" && value.type !== "assistant" && value.type !== "tool-result" && value.type !== "error") return false;
-  if (value.text !== undefined && typeof value.text !== "string") return false;
-  if (value.contextRefs !== undefined && (!Array.isArray(value.contextRefs) || !value.contextRefs.every(isContextRef))) return false;
-  if (value.toolName !== undefined && typeof value.toolName !== "string") return false;
-  if (value.toolInput !== undefined && !isRecord(value.toolInput)) return false;
-  if (value.toolResult !== undefined && !isToolResult(value.toolResult)) return false;
-  return true;
-}
-
-function isUnifiedMessage(value: unknown): value is UnifiedMessage {
-  if (!isRecord(value) || (value.role !== "user" && value.role !== "assistant")) return false;
-  if (typeof value.content !== "string") {
-    if (!Array.isArray(value.content) || !value.content.every(isContentBlock)) return false;
-  }
-  if (value.contextRefs !== undefined && (!Array.isArray(value.contextRefs) || !value.contextRefs.every(isContextRef))) return false;
-  return true;
-}
-
-function isContentBlock(value: unknown): boolean {
-  if (!isRecord(value)) return false;
-  return value.type === "text" || value.type === "tool_use" || value.type === "tool_result";
-}
-
-function isToolResult(value: unknown): value is ToolResult {
-  return isRecord(value) && typeof value.result === "string" && typeof value.isError === "boolean";
-}
-
-function finiteTimestamp(value: unknown): value is number {
-  return typeof value === "number" && Number.isFinite(value) && value >= 0;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
 }
