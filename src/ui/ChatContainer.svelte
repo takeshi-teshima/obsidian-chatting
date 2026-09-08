@@ -25,9 +25,14 @@
     onClear: () => void;
     onReload: () => void;
     onStop: () => void;
+    /** Copies device/pasted image files into the vault and reports back ContextRefs + per-file errors. */
+    onAttachFiles: (files: File[]) => Promise<void>;
   }
 
-  let { app, component, provider, model, onSend, onClear, onReload, onStop }: Props = $props();
+  let { app, component, provider, model, onSend, onClear, onReload, onStop, onAttachFiles }: Props = $props();
+
+  const SUPPORTED_PASTE_MIME = ["image/jpeg", "image/png", "image/webp", "image/gif"];
+  let fileInputEl: HTMLInputElement | undefined = $state();
 
   let displayModel = $state("");
   let messages = $state<ChatMessage[]>([]);
@@ -268,6 +273,32 @@
     }
   }
 
+  function handleAttachClick(): void {
+    fileInputEl?.click();
+  }
+
+  async function handleFileInputChange(): Promise<void> {
+    const files = Array.from(fileInputEl?.files ?? []);
+    // Reset so re-selecting the same file again still fires `change`.
+    if (fileInputEl) fileInputEl.value = "";
+    if (files.length > 0) await onAttachFiles(files);
+  }
+
+  /**
+   * Only intercepts clipboard paste when it actually carries supported image
+   * files. The Svelte-level filter here is just a routing decision — the
+   * controller's ImageIngestService performs the authoritative MIME check
+   * (including rejecting HEIC/HEIF) before copying anything into the vault.
+   */
+  async function handlePaste(event: ClipboardEvent): Promise<void> {
+    const files = Array.from(event.clipboardData?.files ?? []).filter((file) =>
+      SUPPORTED_PASTE_MIME.includes(file.type)
+    );
+    if (files.length === 0) return; // ordinary text paste continues untouched
+    event.preventDefault();
+    await onAttachFiles(files);
+  }
+
   /** Remove the `@pdf` mention token from the composer without sending. */
   function dismissPdfMention(): void {
     inputText = pdfMention.text;
@@ -461,6 +492,24 @@
 
   <!-- Input bar -->
   <div class="ochatting-input-bar">
+    <input
+      bind:this={fileInputEl}
+      class="ochatting-hidden-file-input"
+      type="file"
+      accept="image/jpeg,image/png,image/webp,image/gif"
+      multiple
+      hidden
+      onchange={() => void handleFileInputChange()}
+    />
+    <button
+      class="ochatting-attach-btn"
+      type="button"
+      aria-label="Attach image"
+      disabled={!inputEnabled}
+      onclick={handleAttachClick}
+    >
+      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"></path></svg>
+    </button>
     <textarea
       class="ochatting-input"
       bind:this={textareaEl}
@@ -470,6 +519,7 @@
       rows="1"
       onkeydown={handleKeydown}
       oninput={autoGrow}
+      onpaste={(event) => void handlePaste(event)}
     ></textarea>
     {#if inputEnabled}
       <button
@@ -768,6 +818,36 @@
   .ochatting-stop-btn:hover {
     background-color: var(--text-error);
     opacity: 0.85;
+  }
+
+  .ochatting-hidden-file-input {
+    display: none;
+  }
+
+  .ochatting-attach-btn {
+    width: 34px;
+    height: 34px;
+    min-width: 34px;
+    min-height: 34px;
+    padding: 0;
+    border: none;
+    background: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin-bottom: 1px;
+  }
+
+  .ochatting-attach-btn:hover {
+    color: var(--text-normal);
+  }
+
+  .ochatting-attach-btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
   }
 
   /* ─── Selection Pill ─────────────────────────────────────────────────── */
