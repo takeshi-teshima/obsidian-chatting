@@ -19,6 +19,7 @@ const checkFiles = [
   "agent-loop-adapter.check.ts",
   "model-selection.check.ts",
   "model-catalog-persistence.check.ts",
+  "title-generation.check.ts",
 ];
 
 let anyFailed = false;
