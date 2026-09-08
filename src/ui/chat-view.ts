@@ -4,6 +4,7 @@ import type { Component } from "svelte";
 import type ChatPlugin from "../main";
 import ChatContainer from "./ChatContainer.svelte";
 import type { ToolResult, SelectionScope } from "../types";
+import type { ContextRef } from "../context/refs";
 import { getModelDisplayName } from "../settings";
 
 export const VIEW_TYPE_CHAT = "ochatting-view";
@@ -13,7 +14,7 @@ interface ChatContainerProps {
   component: ObsidianChatView;
   provider: string;
   model: string;
-  onSend: (text: string, selection: SelectionScope | null) => void;
+  onSend: (text: string, selection: SelectionScope | null, contextRefs: ContextRef[]) => void;
   onClear: () => void;
   onReload: () => void;
   onStop: () => void;
@@ -34,6 +35,9 @@ interface ChatContainerApi extends Record<string, unknown> {
   setModel(name: string): void;
   setSelection(selection: SelectionScope): void;
   getSelection(): SelectionScope | null;
+  addContextRef(ref: ContextRef): void;
+  removeContextRefById(id: string): void;
+  getContextRefs(): ContextRef[];
 }
 
 /**
@@ -80,8 +84,8 @@ export class ObsidianChatView extends ItemView {
         component: this,
         provider: this.plugin.settings.provider,
         model: getModelDisplayName(this.plugin.settings.provider, this.plugin.settings.model),
-        onSend: (text: string, selection: SelectionScope | null) => {
-          void this.handleUserMessage(text, selection);
+        onSend: (text: string, selection: SelectionScope | null, contextRefs: ContextRef[]) => {
+          void this.handleUserMessage(text, selection, contextRefs);
         },
         onClear: () => this.handleClear(),
         onReload: () => void this.handleReload(),
@@ -158,7 +162,8 @@ export class ObsidianChatView extends ItemView {
 
   private async handleUserMessage(
     text: string,
-    selection: SelectionScope | null
+    selection: SelectionScope | null,
+    contextRefs: ContextRef[] = []
   ): Promise<void> {
     if (this.running) {
       new Notice("Please wait for the current response to complete.");
@@ -211,7 +216,7 @@ export class ObsidianChatView extends ItemView {
           chat.addError(error);
           history.push({ type: "error", text: error });
         },
-      }, selection);
+      }, selection, contextRefs);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       chat.addError(`Unexpected error: ${msg}`);

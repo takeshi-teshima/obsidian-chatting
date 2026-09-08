@@ -2,7 +2,10 @@
   import type { App, Component as ObsidianComponent } from "obsidian";
   import { MarkdownRenderer } from "obsidian";
   import type { ToolResult, SelectionScope } from "../types";
+  import type { ContextRef } from "../context/refs";
   import { parsePdfMention, buildPdfScopedContext, choosePdf } from "../context/pdf-mention";
+  import { parseImageMention, buildImageScopedContext, chooseImage } from "../context/image-mention";
+  import { mergeContextRefs, contextRefLabel } from "../context/ref-list";
 
   interface ChatMessage {
     id: number;
@@ -18,7 +21,7 @@
     component: ObsidianComponent;
     provider: string;
     model: string;
-    onSend: (text: string, selection: SelectionScope | null) => void;
+    onSend: (text: string, selection: SelectionScope | null, contextRefs: ContextRef[]) => void;
     onClear: () => void;
     onReload: () => void;
     onStop: () => void;
@@ -38,11 +41,20 @@
   // Selection scope (shown as a pill above input)
   let selection = $state<SelectionScope | null>(null);
 
-  // Live preview of an `@pdf ...` mention in the composer text. Recomputed
-  // from `inputText` on every change (cheap: metadata-only vault lookups,
-  // no file reads). Drives the removable PDF pill and is re-derived at
-  // send time so it's always in sync with what's about to be sent.
+  // Generic, provider-neutral vault-asset references already attached to
+  // the composer (e.g. via a future paste/attachment flow). This is the
+  // single source of truth for "already attached" context — `@pdf`/`@image`
+  // mentions below are resolved into this same representation at send
+  // time rather than living in their own parallel state slots.
+  let contextRefs = $state<ContextRef[]>([]);
+
+  // Live preview of an `@pdf ...` / `@image ...` mention in the composer
+  // text. Recomputed from `inputText` on every change (cheap: metadata-only
+  // vault lookups, no file reads). Drives the removable mention pill and is
+  // re-derived at send time so it's always in sync with what's about to be
+  // sent.
   let pdfMention = $derived(parsePdfMention(app, inputText));
+  let imageMention = $derived(parseImageMention(app, inputText));
 
   // ask_user support
   let askUserResolve: ((value: string) => void) | null = $state(null);
@@ -123,7 +135,23 @@
   export function clearMessages(): void {
     messages = [];
     selection = null;
+    contextRefs = [];
     hideThinking();
+  }
+
+  /** Attach a context ref to the composer (e.g. from a future paste/attachment flow). */
+  export function addContextRef(ref: ContextRef): void {
+    contextRefs = mergeContextRefs(contextRefs, [ref]);
+  }
+
+  /** Remove a single attached context ref (never touches the underlying vault file). */
+  export function removeContextRefById(id: string): void {
+    contextRefs = contextRefs.filter((r) => r.id !== id);
+  }
+
+  /** Current snapshot of attached context refs. */
+  export function getContextRefs(): ContextRef[] {
+    return [...contextRefs];
   }
 
   export function focus(): void {
@@ -154,9 +182,10 @@
 
   async function handleSend(): Promise<void> {
     const raw = inputText.trim();
-    if (!raw) return;
+    if (!raw && contextRefs.length === 0) return;
 
     if (askUserResolve) {
+      if (!raw) return; // answering a question always needs text
       inputText = "";
       resetHeight();
       addUserMessage(raw);
@@ -166,34 +195,70 @@
       return;
     }
 
-    // Single owner of `@pdf ...` mention parsing: resolve (or error, or
-    // open a picker for a bare mention) before this turn is ever handed
-    // to the agent loop. Cancelling the picker must leave the composer
+    // Single owner of `@pdf ...` / `@image ...` mention parsing: resolve (or
+    // error, or open a picker for a bare mention) before this turn is ever
+    // handed to the agent loop. Cancelling a picker must leave the composer
     // usable and must not send an unintended turn.
-    const parsed = parsePdfMention(app, raw);
-    if (parsed.error) {
-      addError(parsed.error);
+    const pdfParsed = parsePdfMention(app, raw);
+    if (pdfParsed.error) {
+      addError(pdfParsed.error);
       return;
     }
 
-    let ref = parsed.ref;
-    if (parsed.needsPicker) {
+    let pdfRef = pdfParsed.ref;
+    if (pdfParsed.needsPicker) {
       const chosen = await choosePdf(app);
       if (!chosen) return; // cancelled: leave composer usable, do not send
-      ref = chosen;
+      pdfRef = chosen;
     }
+
+    const imageParsed = parseImageMention(app, pdfParsed.text);
+    if (imageParsed.error) {
+      addError(imageParsed.error);
+      return;
+    }
+
+    let imageRef = imageParsed.ref;
+    if (imageParsed.needsPicker) {
+      const chosen = await chooseImage(app);
+      if (!chosen) return; // cancelled: leave composer usable, do not send
+      imageRef = chosen;
+    }
+
+    // Consolidate PDF/image mentions into the single generic ContextRef[]
+    // representation shared with any refs already attached to the composer
+    // (e.g. from a future paste/attachment flow). No parallel pdfRef/imageRef
+    // state is kept past this point.
+    const newRefs = [pdfRef, imageRef].filter((r): r is ContextRef => !!r);
+    let refs: ContextRef[];
+    try {
+      refs = mergeContextRefs(contextRefs, newRefs);
+    } catch (e) {
+      addError(e instanceof Error ? e.message : String(e));
+      return;
+    }
+
+    const remainingText = imageParsed.text;
+    // The provider accepts image-only user content, so allow sending with
+    // no natural-language text as long as at least one ref is attached.
+    if (!remainingText && refs.length === 0) return;
 
     inputText = "";
     resetHeight();
+    contextRefs = []; // one-shot consumption, matching the existing @pdf convention
 
     // Pass current selection and consume it (one-shot per send)
     const currentSelection = selection;
     selection = null;
 
-    // Consume the PDF ref one-shot: the `@pdf` token is already stripped
-    // from `parsed.text`, and the resolved ref never persists past this send.
-    const text = ref ? `${buildPdfScopedContext(ref)}\n\n${parsed.text}` : parsed.text;
-    onSend(text, currentSelection);
+    const scopedParts: string[] = [];
+    if (pdfRef) scopedParts.push(buildPdfScopedContext(pdfRef));
+    if (imageRef) scopedParts.push(buildImageScopedContext(imageRef));
+    const text = scopedParts.length > 0
+      ? `${scopedParts.join("\n\n")}\n\n${remainingText}`
+      : remainingText;
+
+    onSend(text, currentSelection, refs);
   }
 
   function handleKeydown(e: KeyboardEvent): void {
@@ -206,6 +271,11 @@
   /** Remove the `@pdf` mention token from the composer without sending. */
   function dismissPdfMention(): void {
     inputText = pdfMention.text;
+  }
+
+  /** Remove the `@image` mention token from the composer without sending. */
+  function dismissImageMention(): void {
+    inputText = imageMention.text;
   }
 
   function autoGrow(): void {
@@ -348,6 +418,46 @@
       </button>
     </div>
   {/if}
+
+  <!-- Image mention pill: shown as soon as an `@image` token is typed. Stores
+       only the resolved ContextRef's name/path for display — never bytes. -->
+  {#if imageMention.ref || imageMention.needsPicker}
+    <div class="ochatting-selection-pill">
+      <div class="ochatting-selection-content">
+        <span class="ochatting-selection-label">
+          {imageMention.ref ? `Image: ${imageMention.ref.name}` : "Image: choose on send"}
+        </span>
+        {#if imageMention.ref}
+          <span class="ochatting-selection-preview">{imageMention.ref.path}</span>
+        {/if}
+      </div>
+      <button
+        class="ochatting-selection-dismiss"
+        onclick={dismissImageMention}
+        aria-label="Remove image mention"
+      >
+        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+      </button>
+    </div>
+  {/if}
+
+  <!-- Generic attached context refs (e.g. from a future paste/attachment
+       flow). Single removable pill per ref; no byte previews. -->
+  {#each contextRefs as ref (ref.id)}
+    <div class="ochatting-selection-pill">
+      <div class="ochatting-selection-content">
+        <span class="ochatting-selection-label">{contextRefLabel(ref)}</span>
+        <span class="ochatting-selection-preview">{ref.path}</span>
+      </div>
+      <button
+        class="ochatting-selection-dismiss"
+        onclick={() => removeContextRefById(ref.id)}
+        aria-label={`Remove ${ref.name}`}
+      >
+        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+      </button>
+    </div>
+  {/each}
 
   <!-- Input bar -->
   <div class="ochatting-input-bar">
