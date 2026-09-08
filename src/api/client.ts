@@ -2,25 +2,34 @@ import type { ChatSettings, UnifiedMessage, UnifiedToolDef, UnifiedResponse } fr
 import { sendAnthropicMessage } from "./anthropic";
 import { sendOpenAIMessage } from "./openai";
 import { sendChatGPTOAuthMessage } from "./chatgpt-oauth";
+import type { ProviderRequestContext } from "./vision";
+import { assertImageMessagesSupported } from "./vision";
 
 /**
  * Dispatches a message to the appropriate provider adapter.
  * Handles single retry on 429 (rate limit) with exponential backoff.
+ *
+ * `requestContext` (optional) carries the per-loop image resolver used to
+ * turn `ContextRef` metadata into provider-native image content at request
+ * time. Text-only calls (e.g. settings connection tests) may omit it.
  */
 export async function sendMessage(
   settings: ChatSettings,
   messages: UnifiedMessage[],
   tools: UnifiedToolDef[],
-  systemPrompt: string
+  systemPrompt: string,
+  requestContext?: ProviderRequestContext
 ): Promise<UnifiedResponse> {
+  assertImageMessagesSupported(settings, messages);
+
   const doSend = () => {
     if (settings.provider === "anthropic") {
-      return sendAnthropicMessage(settings, messages, tools, systemPrompt);
+      return sendAnthropicMessage(settings, messages, tools, systemPrompt, requestContext);
     }
     if (settings.provider === "chatgpt-oauth") {
-      return sendChatGPTOAuthMessage(settings, messages, tools, systemPrompt);
+      return sendChatGPTOAuthMessage(settings, messages, tools, systemPrompt, requestContext);
     }
-    return sendOpenAIMessage(settings, messages, tools, systemPrompt);
+    return sendOpenAIMessage(settings, messages, tools, systemPrompt, requestContext);
   };
 
   try {

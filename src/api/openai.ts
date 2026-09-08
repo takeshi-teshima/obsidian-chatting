@@ -7,6 +7,8 @@ import type {
   ContentBlock,
 } from "../types";
 import { resolveReasoningConfig } from "../model/reasoning";
+import type { ProviderRequestContext } from "./vision";
+import { buildResponsesVisionContent } from "./vision";
 
 const DEFAULT_OPENAI_URL = "https://api.openai.com";
 
@@ -32,13 +34,14 @@ export async function sendOpenAIMessage(
   settings: ChatSettings,
   messages: UnifiedMessage[],
   tools: UnifiedToolDef[],
-  systemPrompt: string
+  systemPrompt: string,
+  requestContext?: ProviderRequestContext
 ): Promise<UnifiedResponse> {
   const baseUrl = DEFAULT_OPENAI_URL;
   const model = settings.model || "gpt-5.3-codex";
 
   // Build input: only the NEW items for this turn
-  const input = buildCurrentTurnInput(messages, systemPrompt);
+  const input = await buildCurrentTurnInput(messages, systemPrompt, requestContext?.images);
 
   const body: Record<string, unknown> = {
     model,
@@ -121,10 +124,11 @@ export async function sendOpenAIMessage(
  * - On tool result calls: function_call_output items
  * - On follow-up user messages: user message
  */
-function buildCurrentTurnInput(
+async function buildCurrentTurnInput(
   messages: UnifiedMessage[],
-  systemPrompt: string
-): Record<string, unknown>[] {
+  systemPrompt: string,
+  resolver?: ProviderRequestContext["images"]
+): Promise<Record<string, unknown>[]> {
   const items: Record<string, unknown>[] = [];
 
   // If no previous response (first call), include all messages
@@ -137,10 +141,11 @@ function buildCurrentTurnInput(
 
     for (const msg of messages) {
       if (typeof msg.content === "string") {
+        const visionContent = await buildResponsesVisionContent(msg, resolver);
         items.push({
           type: "message",
           role: msg.role === "assistant" ? "assistant" : "user",
-          content: msg.content,
+          content: visionContent ?? msg.content,
         });
       }
     }
@@ -152,10 +157,11 @@ function buildCurrentTurnInput(
   if (!lastMsg) return items;
 
   if (typeof lastMsg.content === "string") {
+    const visionContent = await buildResponsesVisionContent(lastMsg, resolver);
     items.push({
       type: "message",
       role: "user",
-      content: lastMsg.content,
+      content: visionContent ?? lastMsg.content,
     });
     return items;
   }

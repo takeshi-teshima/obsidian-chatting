@@ -4,6 +4,7 @@ export type Provider = "anthropic" | "openai" | "chatgpt-oauth";
 
 export type { ReasoningEffort } from "./model/capabilities";
 import type { ReasoningEffort } from "./model/capabilities";
+import type { ContextRef } from "./context/refs";
 
 export interface ChatSettings {
   provider: Provider;
@@ -56,6 +57,13 @@ export interface ContentBlock {
 export interface UnifiedMessage {
   role: "user" | "assistant";
   content: string | ContentBlock[];
+  /**
+   * JSON-safe metadata references to vault assets (images, PDFs) attached to
+   * this message. Never contains file bytes/base64 — see `ContextRef`.
+   * Provider adapters resolve these to provider-native content at request
+   * time via `src/api/vision.ts`; nothing binary is ever persisted here.
+   */
+  contextRefs?: ContextRef[];
 }
 
 // ─── Tool Definitions ───────────────────────────────────────────────────────

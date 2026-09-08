@@ -7,6 +7,8 @@ import type {
   ContentBlock,
 } from "../types";
 import { resolveReasoningConfig } from "../model/reasoning";
+import type { ProviderRequestContext } from "./vision";
+import { buildAnthropicVisionContent } from "./vision";
 
 const ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages";
 
@@ -22,7 +24,8 @@ export async function sendAnthropicMessage(
   settings: ChatSettings,
   messages: UnifiedMessage[],
   tools: UnifiedToolDef[],
-  systemPrompt: string
+  systemPrompt: string,
+  requestContext?: ProviderRequestContext
 ): Promise<UnifiedResponse> {
   const model = settings.model || "claude-sonnet-4-6";
   const body: Record<string, unknown> = {
@@ -37,7 +40,7 @@ export async function sendAnthropicMessage(
         cache_control: { type: "ephemeral" },
       },
     ],
-    messages: messages.map(toAnthropicMessage),
+    messages: await Promise.all(messages.map((msg) => toAnthropicMessageWithVision(msg, requestContext?.images))),
   };
 
   // Enable thinking based on model generation:
@@ -223,6 +226,15 @@ function asRecord(value: unknown): Record<string, unknown> {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
+}
+
+async function toAnthropicMessageWithVision(
+  msg: UnifiedMessage,
+  resolver: ProviderRequestContext["images"]
+): Promise<Record<string, unknown>> {
+  const visionContent = await buildAnthropicVisionContent(msg, resolver);
+  if (visionContent) return { role: msg.role, content: visionContent };
+  return toAnthropicMessage(msg);
 }
 
 function toAnthropicMessage(msg: UnifiedMessage): Record<string, unknown> {
