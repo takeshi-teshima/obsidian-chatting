@@ -14,6 +14,8 @@ export interface ChatSettings {
   enableWebSearch: boolean;
   reasoningEffort: ReasoningEffort;
   customInstructions: string;
+  /** Id of the selected default Prompt Profile (Markdown file under AI/Prompts). Null = no profile / global defaults. */
+  activeProfileId: string | null;
 }
 
 export const DEFAULT_SETTINGS: ChatSettings = {
@@ -24,6 +26,7 @@ export const DEFAULT_SETTINGS: ChatSettings = {
   enableWebSearch: true,
   reasoningEffort: "auto",
   customInstructions: "",
+  activeProfileId: null,
 };
 
 /**
