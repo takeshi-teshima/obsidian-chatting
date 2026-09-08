@@ -77,6 +77,15 @@ export default class ChatPlugin extends Plugin {
       store: this.sessionStore,
       agentFactory: this.buildAgentFactory(),
       getDefaultSessionSeed: () => this.defaultSessionSeed(),
+      getTurnSelectionFallback: (metadata) => {
+        const state = getChattingProviderState(metadata);
+        const provider = isProvider(state.upstreamProvider) ? state.upstreamProvider : this.settings.provider;
+        return {
+          provider,
+          model: metadata.selectedModel || this.settings.model,
+          reasoningEffort: isReasoningEffort(state.reasoningEffort) ? state.reasoningEffort : this.settings.reasoningEffort,
+        };
+      },
       maxConcurrentRuns: 3,
       maxHydratedRuntimes: 8,
       onBackgroundCompletion: (sessionId, outcome) => {
@@ -481,6 +490,25 @@ export default class ChatPlugin extends Plugin {
         const agent = new AgentLoop(this.app, sessionSettings);
         return new AgentLoopSessionAdapter(agent, {
           resetProviderContinuation: () => agent.resetContinuationState(),
+          // Applies the admitted TurnExecutionConfig to this AgentLoop's
+          // session-local settings clone immediately before AgentLoop.run()
+          // starts the tool loop for this turn. Never touches plugin.settings
+          // or any other session's AgentLoop. See turn-execution/turn-settings.ts.
+          applyTurnExecution: (execution) => {
+            agent.updateSettings({
+              provider: execution.provider,
+              model: execution.model,
+              apiKey: this.loadApiKey(execution.provider),
+              ...(execution.reasoningEffort ? { reasoningEffort: execution.reasoningEffort } : {}),
+            });
+          },
+          // OpenAI: clears previousResponseId only when provider/model actually
+          // changed since this session's last turn, forcing a full history
+          // replay on the first request of a new model rather than chaining
+          // off a response id that belongs to a different model.
+          prepareProviderContinuation: (provider, model) => {
+            agent.prepareProviderConversation(provider, model);
+          },
           applySessionMetadata: (next) => {
             const nextState = getChattingProviderState(next);
             agent.updateSettings({

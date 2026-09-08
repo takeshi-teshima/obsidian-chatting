@@ -6,6 +6,7 @@
   import { parsePdfMention, buildPdfScopedContext, choosePdf } from "../context/pdf-mention";
   import { parseImageMention, buildImageScopedContext, chooseImage } from "../context/image-mention";
   import { mergeContextRefs, contextRefLabel } from "../context/ref-list";
+  import TurnModelSelector from "./TurnModelSelector.svelte";
 
   interface ChatMessage {
     id: number;
@@ -27,9 +28,36 @@
     onStop: () => void;
     /** Copies device/pasted image files into the vault and reports back ContextRefs + per-file errors. */
     onAttachFiles: (files: File[]) => Promise<void>;
+    /** Turn-level model/reasoning selector (branch 13). Always edits the NEXT send. */
+    onModelChange: (model: string) => void;
+    onReasoningChange: (effort: string) => void;
   }
 
-  let { app, component, provider, model, onSend, onClear, onReload, onStop, onAttachFiles }: Props = $props();
+  let {
+    app,
+    component,
+    provider,
+    model,
+    onSend,
+    onClear,
+    onReload,
+    onStop,
+    onAttachFiles,
+    onModelChange,
+    onReasoningChange,
+  }: Props = $props();
+
+  // Turn-level selector state, updated exclusively via setNextTurnSelection()
+  // below (called from chat-view.ts on every session snapshot/switch). This
+  // is deliberately NOT derived from the `model` prop: `model`/`displayModel`
+  // reflect the header label, while these reflect the composer's editable
+  // next-send selection, including models/efforts not yet known when this
+  // component first mounted.
+  let turnModels = $state<{ value: string; label: string }[]>([]);
+  let turnSelectedModel = $state("");
+  let turnReasoningEfforts = $state<string[]>([]);
+  let turnSelectedReasoningEffort = $state<string | undefined>(undefined);
+  let turnPendingDiffersFromActive = $state(false);
 
   const SUPPORTED_PASTE_MIME = ["image/jpeg", "image/png", "image/webp", "image/gif"];
   let fileInputEl: HTMLInputElement | undefined = $state();
@@ -166,6 +194,27 @@
   /** Update the model display name in the header */
   export function setModel(name: string): void {
     displayModel = name;
+  }
+
+  /**
+   * Update the composer's turn-level model/reasoning selector. Called from
+   * chat-view.ts whenever the bound session's runtime snapshot changes
+   * (session switch, external setNextTurnSelection call, migration fallback
+   * resolution) so the control always reflects `SessionMetadata.selectedModel`
+   * / `providerState.reasoningEffort` — never plugin-global settings.
+   */
+  export function setNextTurnSelection(
+    models: { value: string; label: string }[],
+    selectedModel: string,
+    reasoningEfforts: string[],
+    selectedReasoningEffort: string | undefined,
+    pendingDiffersFromActive: boolean,
+  ): void {
+    turnModels = models;
+    turnSelectedModel = selectedModel;
+    turnReasoningEfforts = reasoningEfforts;
+    turnSelectedReasoningEffort = selectedReasoningEffort;
+    turnPendingDiffersFromActive = pendingDiffersFromActive;
   }
 
   /** Set the selection scope (shows pill in UI) */
@@ -489,6 +538,19 @@
       </button>
     </div>
   {/each}
+
+  <!-- Turn-level model/reasoning selector (branch 13): edits the NEXT send,
+       not the currently running turn. Reuses branch 12's pane-layout
+       responsive attribute; see TurnModelSelector.svelte. -->
+  <TurnModelSelector
+    models={turnModels}
+    selectedModel={turnSelectedModel}
+    reasoningEfforts={turnReasoningEfforts}
+    selectedReasoningEffort={turnSelectedReasoningEffort}
+    pendingDiffersFromActive={turnPendingDiffersFromActive}
+    onModelChange={onModelChange}
+    onReasoningChange={onReasoningChange}
+  />
 
   <!-- Input bar -->
   <div class="ochatting-input-bar">

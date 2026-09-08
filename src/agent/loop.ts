@@ -90,6 +90,19 @@ export class AgentLoop {
     return { ...this.settings };
   }
 
+  /**
+   * Prepare this session's provider continuation state for an about-to-start
+   * turn's admitted provider/model. Delegates to
+   * ProviderConversationState.prepare(), which clears `previousResponseId`
+   * only when the provider/model identity actually changed since the last
+   * turn — so a same-model turn keeps its continuation optimization, while a
+   * model change forces the next request to do a full history replay
+   * instead of chaining off a response id that belongs to a different model.
+   */
+  prepareProviderConversation(provider: string, model: string): void {
+    this.providerConversation.prepare(provider, model);
+  }
+
   /** Clear conversation history */
   clear(): void {
     this.messages = [];

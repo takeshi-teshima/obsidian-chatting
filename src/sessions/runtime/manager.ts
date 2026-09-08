@@ -1,4 +1,6 @@
 import type { SessionMetadata } from "../metadata/types";
+import { applyNextTurnSelection, resolveNextTurnExecution, type TurnSelectionFallback } from "../../turn-execution/selection";
+import type { TurnExecutionConfig } from "../../turn-execution/types";
 import type { SessionWorkspaceStore, CreateSessionInput } from "../store";
 import { SessionRuntime, type SessionAgentAdapter } from "./runtime";
 import type {
@@ -6,6 +8,7 @@ import type {
   SessionQueryResult,
   SessionRunOutcome,
   SessionRunRequest,
+  SessionSendRequest,
   SessionRuntimeEvent,
   SessionRuntimeSnapshot,
   SessionStoreStats,
@@ -19,6 +22,13 @@ export interface SessionManagerOptions {
   store: SessionWorkspaceStore;
   agentFactory: SessionAgentFactory;
   getDefaultSessionSeed: () => CreateSessionInput;
+  /**
+   * Resolves provider/model/reasoning for a legacy session missing one or
+   * more of `selectedModel` / `providerState.upstreamProvider` /
+   * `providerState.reasoningEffort`. Never used to override an explicit
+   * per-session selection that is already present.
+   */
+  getTurnSelectionFallback: (metadata: SessionMetadata) => TurnSelectionFallback;
   /** Recommended: 2 on narrow/mobile, 3-4 on desktop. */
   maxConcurrentRuns?: number;
   /** Recommended: 6-10 hydrated idle runtimes. */
@@ -46,6 +56,7 @@ export class SessionManager {
   private readonly store: SessionWorkspaceStore;
   private readonly agentFactory: SessionAgentFactory;
   private readonly getDefaultSessionSeed: () => CreateSessionInput;
+  private readonly getTurnSelectionFallback: SessionManagerOptions["getTurnSelectionFallback"];
   private readonly maxConcurrentRuns: number;
   private readonly maxHydratedRuntimes: number;
   private readonly onBackgroundCompletion?: SessionManagerOptions["onBackgroundCompletion"];
@@ -62,6 +73,7 @@ export class SessionManager {
     this.store = options.store;
     this.agentFactory = options.agentFactory;
     this.getDefaultSessionSeed = options.getDefaultSessionSeed;
+    this.getTurnSelectionFallback = options.getTurnSelectionFallback;
     this.maxConcurrentRuns = clamp(options.maxConcurrentRuns ?? 3, 1, 6);
     this.maxHydratedRuntimes = clamp(options.maxHydratedRuntimes ?? 8, 2, 24);
     this.onBackgroundCompletion = options.onBackgroundCompletion;
@@ -156,26 +168,39 @@ export class SessionManager {
     return (await this.ensureRuntime(id)).subscribe(listener);
   }
 
-  async runForView(viewId: string, request: SessionRunRequest): Promise<void> {
+  async runForView(viewId: string, request: SessionSendRequest): Promise<void> {
     const id = this.viewBindings.get(viewId);
     if (!id) throw new Error(`View ${viewId} is not bound to a session.`);
     return this.run(id, request);
   }
 
-  async run(sessionId: string, request: SessionRunRequest): Promise<void> {
+  async run(sessionId: string, request: SessionSendRequest): Promise<void> {
     const meta = await this.store.getMeta(sessionId);
     if (!meta) throw new Error(`Session not found: ${sessionId}`);
     if (meta.isArchived) throw new Error("Unarchive this conversation before sending.");
     const runtime = await this.ensureRuntime(sessionId);
     if (runtime.status !== "idle") throw new Error(`Session is already ${runtime.status}.`);
 
+    // Admission snapshot: captured NOW, at Send, from the session's current
+    // next-turn selection. Any selector change made after this point (while
+    // this turn runs or waits in the global concurrency queue) affects only
+    // a LATER send, never this one. See SEMANTICS.md invariants 6-9.
+    const metadata = runtime.snapshot().metadata;
+    const admitted: SessionRunRequest = {
+      ...request,
+      execution: request.execution ?? resolveNextTurnExecution(
+        metadata,
+        this.getTurnSelectionFallback(metadata),
+      ),
+    };
+
     if (this.runningCount >= this.maxConcurrentRuns) {
       runtime.setQueued();
       return new Promise<void>((resolve, reject) => {
-        this.queue.push({ sessionId, request, resolve, reject });
+        this.queue.push({ sessionId, request: admitted, resolve, reject });
       });
     }
-    return this.startRuntime(runtime, request);
+    return this.startRuntime(runtime, admitted);
   }
 
   async stop(sessionId: string): Promise<void> {
@@ -241,12 +266,37 @@ export class SessionManager {
     this.emit({ type: "catalog-changed", sessionId });
   }
 
-  async setSelectedModel(sessionId: string, model: string): Promise<void> {
-    const runtime = this.runtimes.get(sessionId);
-    if (runtime?.isBusy) throw new Error("Change model after the current turn completes.");
-    if (runtime) await runtime.updateMetadata((metadata) => ({ ...metadata, selectedModel: model }));
-    else await this.store.setSelectedModel(sessionId, model);
+  /**
+   * Change the configuration for the NEXT send. Intentionally allowed while
+   * the current turn is running or queued: the active/queued request already
+   * owns its own immutable TurnExecutionConfig snapshot captured at
+   * admission time (see run() above), so this can never retroactively change
+   * an in-flight turn. `allowProviderSwitch` is branch-14 territory (a
+   * pristine, messageCount===0 conversation may switch provider); branch 13
+   * always calls this with the default `false`, which preserves invariant 1
+   * (one conversation, one upstream provider) for any conversation that has
+   * ever sent a message.
+   */
+  async setNextTurnSelection(
+    sessionId: string,
+    selection: TurnExecutionConfig,
+    allowProviderSwitch = false,
+  ): Promise<void> {
+    const next = await this.store.updateMetadata(
+      sessionId,
+      (metadata) => applyNextTurnSelection(metadata, selection, allowProviderSwitch),
+    );
+    if (!next) throw new Error(`Session not found: ${sessionId}`);
+    this.runtimes.get(sessionId)?.adoptMetadata(next);
     this.emit({ type: "catalog-changed", sessionId });
+  }
+
+  /** Backward-compatible model-only entry point; keeps the session's current provider/reasoning. */
+  async setSelectedModel(sessionId: string, model: string): Promise<void> {
+    const runtime = await this.ensureRuntime(sessionId);
+    const metadata = runtime.snapshot().metadata;
+    const current = resolveNextTurnExecution(metadata, this.getTurnSelectionFallback(metadata));
+    await this.setNextTurnSelection(sessionId, { ...current, model });
   }
 
   async archive(sessionId: string): Promise<void> {

@@ -39,10 +39,19 @@ const modelCache = new Map<string, ModelOption[]>();
 
 /** Resolve a model ID to its display name */
 export function getModelDisplayName(provider: string, modelId: string): string {
-  const cached = modelCache.get(provider);
-  const models = cached || FALLBACK_MODELS[provider] || [];
+  const models = getModelOptions(provider);
   const match = models.find((m) => m.value === modelId);
   return match?.label || modelId;
+}
+
+/**
+ * Current known model list for a provider: whatever was last fetched from
+ * the provider (cached for this session) or the bundled fallback list.
+ * Reused by the turn-level model selector (src/turn-execution/catalog.ts)
+ * so there is exactly one catalog, not a competing one.
+ */
+export function getModelOptions(provider: string): ModelOption[] {
+  return modelCache.get(provider) || FALLBACK_MODELS[provider] || [];
 }
 
 // ─── Settings Tab ───────────────────────────────────────────────────────────

@@ -98,6 +98,7 @@ async function main() {
       },
     },
     getDefaultSessionSeed: () => ({ title: "New chat" }),
+    getTurnSelectionFallback: () => ({ provider: "anthropic", model: "claude-sonnet-4-6" }),
     maxConcurrentRuns: 3,
     maxHydratedRuntimes: 8,
   });

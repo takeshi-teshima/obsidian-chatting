@@ -209,6 +209,23 @@ export class SessionRuntime {
     if ((this.phase as SessionRunPhase) !== "idle") await this.finish("stopped");
   }
 
+  /**
+   * Adopt metadata already persisted by SessionManager.setNextTurnSelection().
+   * Safe to call while a turn is active: the active turn already owns an
+   * immutable TurnExecutionConfig snapshot captured at admission time (see
+   * SessionManager.run()), so updating the in-memory "next send" metadata
+   * here can never retroactively change what the running turn does. This is
+   * distinct from updateMetadata() below, which still refuses to run while
+   * busy because it covers non-turn-scoped configuration (title, pin, etc.)
+   * that has no such admission-time snapshot to protect it.
+   */
+  adoptMetadata(metadata: SessionMetadata): void {
+    if (metadata.id !== this.id) throw new Error("Cannot adopt metadata from another session.");
+    this.workspace.metadata = clone(metadata);
+    this.touch();
+    this.emit({ type: "snapshot", snapshot: this.snapshot() });
+  }
+
   async updateMetadata(
     updater: (metadata: SessionMetadata) => SessionMetadata,
   ): Promise<void> {

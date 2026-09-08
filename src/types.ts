@@ -5,6 +5,7 @@ export type Provider = "anthropic" | "openai" | "chatgpt-oauth";
 export type { ReasoningEffort } from "./model/capabilities";
 import type { ReasoningEffort } from "./model/capabilities";
 import type { ContextRef } from "./context/refs";
+import type { TurnExecutionProvenance } from "./turn-execution/types";
 
 export interface ChatSettings {
   provider: Provider;
@@ -64,6 +65,14 @@ export interface UnifiedMessage {
    * time via `src/api/vision.ts`; nothing binary is ever persisted here.
    */
   contextRefs?: ContextRef[];
+  /**
+   * Provider-native turn-execution provenance (branch 13: turn-level model
+   * selection). Only ever set on canonical user turn-starters (string
+   * content), never on tool-result "user" messages. Absent on messages
+   * created before this branch and on any message this branch doesn't stamp
+   * — never retroactively synthesized. See src/turn-execution/provenance.ts.
+   */
+  execution?: TurnExecutionProvenance;
 }
 
 // ─── Tool Definitions ───────────────────────────────────────────────────────

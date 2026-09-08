@@ -1,6 +1,7 @@
 import type { ContextRef } from "../../context/refs";
 import type { SelectionScope, ToolResult, UnifiedMessage } from "../../types";
 import type { ConversationMeta, SessionMetadata } from "../metadata/types";
+import type { TurnExecutionConfig } from "../../turn-execution/types";
 
 export type SessionRunPhase =
   | "idle"
@@ -52,10 +53,23 @@ export interface LoadedSessionWorkspace {
   localState: SessionLocalState;
 }
 
-export interface SessionRunRequest {
+/** Public request shape: normal UI callers never set `execution` explicitly. */
+export interface SessionSendRequest {
   text: string;
   contextRefs?: ContextRef[];
   selection?: SelectionScope | null;
+  /** Optional explicit snapshot for programmatic callers (e.g. tests). Normal UI omits it. */
+  execution?: TurnExecutionConfig;
+}
+
+/**
+ * Internal admitted request. Always carries the immutable execution snapshot
+ * captured by SessionManager.run() at admission time (before any queueing),
+ * so a request waiting behind the global concurrency cap still executes with
+ * whatever model/reasoning was selected when Send was pressed for it.
+ */
+export interface SessionRunRequest extends Omit<SessionSendRequest, "execution"> {
+  execution: TurnExecutionConfig;
 }
 
 export interface SessionRuntimeSnapshot {
