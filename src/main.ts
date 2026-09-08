@@ -1,25 +1,30 @@
 import {
   Plugin,
   Notice,
-  Platform,
   type MarkdownFileInfo,
   type Editor,
   Menu,
   TFile,
   type TAbstractFile,
 } from "obsidian";
-import type { ChatSettings, SelectionScope } from "./types";
+import type { ChatSettings, SelectionScope, UnifiedMessage } from "./types";
 import { DEFAULT_SETTINGS, CHATGPT_OAUTH_DEFAULT_MODEL } from "./types";
 import { ChatSettingTab, getModelDisplayName } from "./settings";
 import { ObsidianChatView, VIEW_TYPE_CHAT } from "./ui/chat-view";
+import { AgentLoop } from "./agent/loop";
 import { ChatGPTOAuthStore } from "./auth/chatgptOAuthStore";
 import { ChatGPTOAuthService } from "./auth/chatgptOAuth";
 import { setChatGPTOAuthService } from "./api/chatgpt-oauth";
-import { AgentLoopSessionAdapter } from "./agent/session-adapter";
-import { SessionStore } from "./session/store";
-import { SessionManager, preferencesFromSettings, type SessionAgentFactory } from "./session/manager";
-import { showBackgroundSessionNotice } from "./session/background-notice";
-import type { PersistedSession } from "./session/types";
+import { ObsidianSessionStorageAdapter } from "./sessions/obsidian-storage-adapter";
+import { ObsidianLegacyReadAdapter } from "./sessions/obsidian-legacy-read-adapter";
+import { SessionMetadataStore } from "./sessions/metadata/store";
+import { ChattingHistoryStore } from "./sessions/history/store";
+import { SessionIndexStore } from "./sessions/index/store";
+import { createSessionMetadata } from "./sessions/metadata/factory";
+import { toConversationMeta } from "./sessions/index/derived-index";
+import { runMigration } from "./sessions/migration/run-migration";
+import { loadActiveSessionId, saveActiveSessionId } from "./sessions/runtime/active-session";
+import { deriveDisplayHistory, type DisplayEntry } from "./sessions/display-history";
 
 const PLUGIN_ID = "chatting-with-ai";
 const LEGACY_PLUGIN_ID = "obsidian-chatting";
@@ -30,59 +35,48 @@ const LEGACY_CHATGPT_OAUTH_SECRET_KEY = `${LEGACY_PLUGIN_ID}-chatgpt-oauth`;
 
 export default class ChatPlugin extends Plugin {
   settings: ChatSettings = DEFAULT_SETTINGS;
+  /** Shared agent loop that persists across view open/close cycles */
+  agent!: AgentLoop;
   /** ChatGPT OAuth service (used by the chatgpt-oauth provider). */
   chatgptOAuth!: ChatGPTOAuthService;
+  /** Chat messages for replaying into the UI when the view reopens. Display-only,
+   * re-derived from canonical UnifiedMessage history — see sessions/display-history.ts. */
+  chatHistory: DisplayEntry[] = [];
 
+  /** Session Workspaces v4 canonical storage (`.chatting/...` at the vault root). */
+  private sessionAdapter!: ObsidianSessionStorageAdapter;
+  private metadataStore!: SessionMetadataStore;
+  private historyStore!: ChattingHistoryStore;
+  private indexStore!: SessionIndexStore;
   /**
-   * Session Workspaces storage/orchestration. There is deliberately no
-   * plugin-global "active session" or plugin-global AgentLoop: each
-   * ObsidianChatView binds independently to a session id, and each
-   * hydrated SessionRuntime owns exactly one agent adapter. See
-   * src/session/manager.ts and MERGE_INSTRUCTIONS.md.
+   * Id of the single session this plugin's one visible chat pane is bound
+   * to. See sessions/runtime/active-session.ts for why this is NOT part of
+   * SessionMetadata, and the migration report for why multi-session
+   * concurrent binding (v3's SessionManager/SessionSwitcher) was not
+   * re-ported in this pass.
    */
-  sessionStore!: SessionStore;
-  sessionManager!: SessionManager;
+  private activeSessionId!: string;
 
   async onload(): Promise<void> {
     await this.migrateLegacyPluginData();
     await this.loadSettings();
 
-    // Wire ChatGPT OAuth before constructing any agent adapters: the OAuth
-    // API client looks up the service via setChatGPTOAuthService().
+    // Wire ChatGPT OAuth before constructing the agent: the OAuth API client
+    // looks up the service via setChatGPTOAuthService().
     const oauthStore = new ChatGPTOAuthStore(this.app);
     this.chatgptOAuth = new ChatGPTOAuthService(oauthStore);
     setChatGPTOAuthService(this.chatgptOAuth);
 
-    this.sessionStore = new SessionStore(this.app, PLUGIN_ID);
-    await this.sessionStore.initialize({
-      legacyChatStatePaths: [this.chatStatePath, this.legacyChatStatePath],
-      defaultPreferences: preferencesFromSettings(this.settings),
-    });
+    this.agent = new AgentLoop(this.app, this.settings);
 
-    const agentFactory: SessionAgentFactory = {
-      create: (session: PersistedSession) =>
-        new AgentLoopSessionAdapter(this.app, this.settingsForSession(session)),
-    };
+    this.sessionAdapter = new ObsidianSessionStorageAdapter(this.app);
+    this.metadataStore = new SessionMetadataStore(this.sessionAdapter);
+    this.historyStore = new ChattingHistoryStore(this.sessionAdapter);
+    this.indexStore = new SessionIndexStore(this.sessionAdapter);
 
-    this.sessionManager = new SessionManager({
-      store: this.sessionStore,
-      agentFactory,
-      getDefaultPreferences: () => preferencesFromSettings(this.settings),
-      maxConcurrentRuns: this.resolveMaxConcurrentSessions(),
-      maxHydratedRuntimes: this.settings.maxHydratedSessions,
-      onBackgroundCompletion: (summary, outcome) => {
-        if (!this.settings.notifyBackgroundSessionCompletion) return;
-        showBackgroundSessionNotice(summary, outcome, (sessionId) => {
-          void this.revealSession(sessionId);
-        });
-      },
-      onStoreConflict: (error) => {
-        new Notice(
-          `A conversation changed on disk while editing it (${error.sessionId}). Your local changes were preserved under conflicts/; reload the conversation before sending again.`,
-          10000,
-        );
-      },
-    });
+    // Restore persisted chat history (runs v3/branch-11/legacy migration
+    // into `.chatting/` canonical storage on first run; idempotent after).
+    await this.loadChatHistory();
 
     this.addSettingTab(new ChatSettingTab(this.app, this));
 
@@ -92,21 +86,16 @@ export default class ChatPlugin extends Plugin {
     // Ribbon icon (users can hide; commands are the primary access)
     this.addRibbonIcon("message-circle", "Open Chatting with AI", (evt) => {
       if (evt.type === "contextmenu" || evt.button === 2) {
+        // Right-click: show menu with options
         const menu = new Menu();
         menu.addItem((item) =>
           item.setTitle("Open chat").setIcon("message-circle").onClick(() => void this.openChat())
         );
         menu.addItem((item) =>
-          item.setTitle("New conversation").setIcon("plus").onClick(() => void this.newConversation())
-        );
-        menu.addItem((item) =>
-          item.setTitle("Browse conversations").setIcon("list").onClick(() => void this.browseConversations())
-        );
-        menu.addItem((item) =>
           item.setTitle("Chat about active note").setIcon("file-text").onClick(() => void this.chatAboutActiveNote())
         );
         menu.addItem((item) =>
-          item.setTitle("Copy transcript").setIcon("clipboard").onClick(() => void this.shareTranscript())
+          item.setTitle("Copy transcript").setIcon("clipboard").onClick(() => this.shareTranscript())
         );
         menu.showAtMouseEvent(evt);
       } else {
@@ -125,136 +114,47 @@ export default class ChatPlugin extends Plugin {
     this.addCommand({
       id: "copy-transcript",
       name: "Copy conversation transcript to clipboard",
-      callback: () => void this.shareTranscript(),
+      callback: () => this.shareTranscript(),
     });
 
     this.addCommand({
-      id: "new-conversation",
-      name: "New conversation",
-      callback: () => void this.newConversation(),
-    });
-
-    this.addCommand({
-      id: "browse-conversations",
-      name: "Browse conversations",
-      callback: () => void this.browseConversations(),
-    });
-
-    this.addCommand({
-      id: "switch-conversation",
-      name: "Switch conversation",
-      callback: () => void this.browseConversations(),
-    });
-
-    this.addCommand({
-      id: "open-conversation-new-pane",
-      name: "Open current conversation in new pane",
-      checkCallback: (checking) => {
-        if (Platform.isMobile) return false;
-        const view = this.getChatView();
-        if (checking) return !!view?.currentSessionId;
-        void view?.openCurrentInNewPane();
-        return true;
-      },
-    });
-
-    this.addCommand({
-      id: "rename-conversation",
-      name: "Rename conversation",
-      checkCallback: (checking) => {
-        const view = this.getChatView();
-        if (checking) return !!view?.currentSessionId;
-        void view?.renameCurrent();
-        return true;
-      },
-    });
-
-    this.addCommand({
-      id: "pin-unpin-conversation",
-      name: "Pin/unpin conversation",
-      checkCallback: (checking) => {
-        const view = this.getChatView();
-        if (checking) return !!view?.currentSessionId;
-        void view?.pinToggleCurrent();
-        return true;
-      },
-    });
-
-    this.addCommand({
-      id: "archive-conversation",
-      name: "Archive conversation",
-      checkCallback: (checking) => {
-        const view = this.getChatView();
-        if (checking) return !!view?.currentSessionId;
-        void view?.archiveCurrent();
-        return true;
-      },
-    });
-
-    this.addCommand({
-      id: "show-archived-conversations",
-      name: "Show archived conversations",
-      callback: async () => {
-        await this.openChat();
-        this.getChatView()?.openBrowser("archived");
-      },
-    });
-
-    this.addCommand({
-      id: "fork-conversation",
-      name: "Fork conversation",
-      checkCallback: (checking) => {
-        const view = this.getChatView();
-        if (checking) return !!view?.currentSessionId;
-        void view?.forkCurrent();
-        return true;
-      },
-    });
-
-    this.addCommand({
-      id: "stop-conversation",
-      name: "Stop current conversation",
-      checkCallback: (checking) => {
-        const view = this.getChatView();
-        if (checking) return !!view?.currentSessionId;
-        view?.stopCurrent();
-        return true;
-      },
-    });
-
-    this.addCommand({
-      id: "delete-conversation",
-      name: "Delete conversation",
-      checkCallback: (checking) => {
-        const view = this.getChatView();
-        if (checking) return !!view?.currentSessionId;
-        void view?.deleteCurrent();
-        return true;
-      },
+      id: "clear-chat",
+      name: "Clear conversation",
+      callback: () => this.clearChat(),
     });
 
     this.addCommand({
       id: "reload-conversation-from-disk",
       name: "Reload conversation from disk (recovery)",
-      checkCallback: (checking) => {
-        const view = this.getChatView();
-        if (checking) return !!view?.currentSessionId;
-        void view?.reloadCurrentFromDisk();
-        return true;
+      callback: () => void this.reloadActiveSessionFromDisk(),
+    });
+
+    // Editor command: chat about the current note (only when editor is active)
+    this.addCommand({
+      id: "chat-about-note",
+      name: "Chat about this note",
+      editorCallback: (editor: Editor, ctx: MarkdownFileInfo) => {
+        void this.openChatWithMessage(`Summarize this note: ${ctx.file?.path ?? "the active document"}`);
       },
     });
 
+    // Editor command: chat about selected text (conditional, only when text is selected)
     this.addCommand({
-      id: "rebuild-conversation-index",
-      name: "Rebuild conversation index (recovery/advanced)",
-      callback: async () => {
-        await this.sessionStore.rebuildCatalogsFromBodies();
-        new Notice("Conversation index rebuilt.");
+      id: "send-selection",
+      name: "Send selection to Chat",
+      editorCheckCallback: (checking: boolean, editor: Editor, ctx: MarkdownFileInfo) => {
+        const sel = editor.getSelection();
+        if (!sel || sel.length === 0) return false;
+        if (checking) return true;
+        const scope: SelectionScope = { text: sel, filePath: ctx.file?.path ?? "" };
+        void this.openChatWithSelection(scope);
+        return true;
       },
     });
 
     // ─── Context menus ──────────────────────────────────────────────────
 
+    // File explorer context menu
     this.registerEvent(
       this.app.workspace.on("file-menu", (menu: Menu, file: TAbstractFile) => {
         if (!(file instanceof TFile)) return;
@@ -280,6 +180,7 @@ export default class ChatPlugin extends Plugin {
       })
     );
 
+    // Editor right-click context menu
     this.registerEvent(
       this.app.workspace.on("editor-menu", (menu: Menu, editor: Editor, info: MarkdownFileInfo) => {
         const sel = editor.getSelection();
@@ -296,34 +197,10 @@ export default class ChatPlugin extends Plugin {
         }
       })
     );
-
-    this.addCommand({
-      id: "chat-about-note",
-      name: "Chat about this note",
-      editorCallback: (editor: Editor, ctx: MarkdownFileInfo) => {
-        void this.openChatWithMessage(`Summarize this note: ${ctx.file?.path ?? "the active document"}`);
-      },
-    });
-
-    this.addCommand({
-      id: "send-selection",
-      name: "Send selection to Chat",
-      editorCheckCallback: (checking: boolean, editor: Editor, ctx: MarkdownFileInfo) => {
-        const sel = editor.getSelection();
-        if (!sel || sel.length === 0) return false;
-        if (checking) return true;
-        const scope: SelectionScope = { text: sel, filePath: ctx.file?.path ?? "" };
-        void this.openChatWithSelection(scope);
-        return true;
-      },
-    });
   }
 
-  async onunload(): Promise<void> {
-    // Running work cannot survive Obsidian process death; shutdown()
-    // stops/flushes cleanly. Recovery markers (SessionRecoveryMarker) catch
-    // the unclean-death case (crash / force-quit) on next load.
-    await this.sessionManager?.shutdown();
+  onunload(): void {
+    void this.saveChatHistory();
   }
 
   // ─── Chat operations ────────────────────────────────────────────────
@@ -353,31 +230,6 @@ export default class ChatPlugin extends Plugin {
       return;
     }
     await this.activateView();
-  }
-
-  private async newConversation(): Promise<void> {
-    if (!this.isProviderConfigured()) {
-      new Notice(this.notConfiguredMessage());
-      return;
-    }
-    await this.activateView();
-    await this.getChatView()?.createAndSwitchToNewSession();
-  }
-
-  private async browseConversations(): Promise<void> {
-    if (!this.isProviderConfigured()) {
-      new Notice(this.notConfiguredMessage());
-      return;
-    }
-    await this.activateView();
-    await this.getChatView()?.openBrowser();
-  }
-
-  /** Reveal (or open) the chat view and switch it to the given session. Used by background-completion notices. */
-  private async revealSession(sessionId: string): Promise<void> {
-    await this.activateView();
-    const view = this.getChatView();
-    if (view) await view.revealAndSwitchTo(sessionId);
   }
 
   /** Open chat and immediately send a message */
@@ -468,32 +320,182 @@ export default class ChatPlugin extends Plugin {
     });
   }
 
-  // ─── Session Workspaces plumbing ────────────────────────────────────
-
-  /**
-   * Builds the effective ChatSettings for a single session's agent adapter.
-   * Provider/model/profile/effort are session-owned (SessionPreferences);
-   * everything else (API key, custom instructions, iteration cap, web
-   * search toggle) comes from current global settings. The API key is
-   * looked up fresh per provider from SecretStorage — it is never read from
-   * or written into session JSON (invariant #6).
-   */
-  private settingsForSession(session: PersistedSession): ChatSettings {
-    const provider = session.preferences.provider;
-    return {
-      ...this.settings,
-      provider,
-      apiKey: provider === this.settings.provider ? this.settings.apiKey : this.loadApiKey(provider),
-      model: session.preferences.model,
-      activeProfileId: session.preferences.profileId ?? null,
-      reasoningEffort: session.preferences.effortOverride ?? this.settings.reasoningEffort,
-    };
+  private clearChat(): void {
+    const view = this.getChatView();
+    if (view) {
+      view.clearConversation();
+      new Notice("Conversation cleared.");
+    } else {
+      new Notice("No active conversation.");
+    }
   }
 
-  private resolveMaxConcurrentSessions(): number {
-    const configured = this.settings.maxConcurrentSessions;
-    if (Platform.isMobile) return Math.min(configured, 2) || 2;
-    return configured;
+  // ─── Session Workspaces v4 persistence ─────────────────────────────────
+  //
+  // Canonical storage is `.chatting/session-metadata/<id>.meta.json` +
+  // `.chatting/sessions/<id>.jsonl` (Claudian-shaped metadata + Chatting-
+  // native UnifiedMessage JSONL transcript). See src/sessions/ and
+  // MIGRATION_HANDOFF.md / MERGE_INSTRUCTIONS.md for the full contract.
+
+  /** Persist the active session's transcript + metadata after a turn. */
+  async saveChatHistory(): Promise<void> {
+    try {
+      const messages = this.agent.exportMessages();
+      await this.historyStore.replace(this.activeSessionId, messages);
+
+      const loaded = await this.metadataStore.load(this.activeSessionId);
+      const now = Date.now();
+      const metadata = loaded?.metadata ?? createSessionMetadata({
+        id: this.activeSessionId,
+        historyPath: this.historyStore.pathFor(this.activeSessionId),
+      });
+      metadata.lastActivityAt = now;
+      if (!metadata.title || metadata.title === "New chat") {
+        metadata.title = deriveTitleFromMessages(messages) ?? metadata.title ?? "New chat";
+      }
+      metadata.selectedModel = this.settings.model;
+      metadata.providerState = {
+        ...(metadata.providerState ?? {}),
+        history: {
+          format: "unified-message-jsonl",
+          schemaVersion: 1,
+          path: this.historyStore.pathFor(this.activeSessionId),
+          revision: (((metadata.providerState as { history?: { revision?: number } } | undefined)?.history?.revision) ?? 0) + 1,
+        },
+        upstreamProvider: this.settings.provider,
+        profileId: this.settings.activeProfileId,
+        reasoningEffort: this.settings.reasoningEffort,
+      };
+      await this.metadataStore.save(metadata, loaded?.unknownFields);
+
+      await this.indexStore.upsert(
+        toConversationMeta(metadata, {
+          messageCount: messages.length,
+          preview: derivePreviewFromMessages(messages),
+        }),
+      );
+    } catch {
+      // Persistence is best-effort, matching the previous chat-state.json behavior.
+    }
+  }
+
+  /**
+   * Boot-time restore: runs the (idempotent, non-destructive) v3/branch-11/
+   * legacy-chat-state migration into `.chatting/` canonical storage, then
+   * loads whichever session is active into the in-memory agent + display
+   * history.
+   */
+  async loadChatHistory(): Promise<void> {
+    try {
+      const summary = await runMigration({
+        canonicalAdapter: this.sessionAdapter,
+        legacyAdapter: new ObsidianLegacyReadAdapter(this.app),
+        pluginDataDir: this.pluginDataDir,
+        legacyChatStatePaths: [this.chatStatePath, this.legacyChatStatePath],
+        currentProvider: this.settings.provider,
+        currentModel: this.settings.model,
+      });
+      if (summary.migratedCount > 0 || summary.failedCount > 0) {
+        const parts = [`Session Workspaces v4: migrated ${summary.migratedCount} conversation(s).`];
+        if (summary.failedCount > 0) parts.push(`${summary.failedCount} failed — see console.`);
+        new Notice(parts.join(" "));
+        if (summary.failedCount > 0) {
+          console.warn("[chatting-with-ai] migration diagnostics", summary.diagnostics);
+        }
+      }
+    } catch (error) {
+      console.error("[chatting-with-ai] v4 migration failed to run", error);
+    }
+
+    this.activeSessionId = await this.resolveActiveSessionId();
+    await this.hydrateFromActiveSession();
+  }
+
+  /**
+   * Explicit "reload this session from disk" recovery path (see the plugin
+   * brief's "restore the reload-from-disk recovery feature under the new
+   * schema" requirement). Re-reads `.chatting/sessions/<id>.jsonl` fresh,
+   * fully replaces in-memory history (never merges), resets provider
+   * continuation state, re-derives + persists lastActivityAt/preview/
+   * messageCount-equivalent metadata, and re-renders the bound view.
+   */
+  async reloadActiveSessionFromDisk(): Promise<void> {
+    const view = this.getChatView();
+    if (view?.isRunning()) {
+      new Notice("Can't reload from disk while a response is in progress. Stop it first.");
+      return;
+    }
+
+    try {
+      const freshMessages = await this.historyStore.load(this.activeSessionId);
+      this.agent.importMessages(freshMessages);
+      this.agent.resetContinuationState();
+      this.chatHistory = deriveDisplayHistory(freshMessages);
+
+      const loaded = await this.metadataStore.load(this.activeSessionId);
+      if (loaded) {
+        loaded.metadata.lastActivityAt = Date.now();
+        await this.metadataStore.save(loaded.metadata, loaded.unknownFields);
+        await this.indexStore.upsert(
+          toConversationMeta(loaded.metadata, {
+            messageCount: freshMessages.length,
+            preview: derivePreviewFromMessages(freshMessages),
+          }),
+        );
+      }
+
+      view?.rerenderFromPluginState();
+      new Notice("Conversation reloaded from disk.");
+    } catch (error) {
+      new Notice(`Reload from disk failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  /** Load the active session's transcript into the agent + display history. */
+  private async hydrateFromActiveSession(): Promise<void> {
+    const messages = await this.historyStore.load(this.activeSessionId);
+    this.agent.importMessages(messages);
+    this.chatHistory = deriveDisplayHistory(messages);
+  }
+
+  /**
+   * Picks which session the single visible pane binds to on startup: the
+   * previously-bound session if it still exists, otherwise the
+   * most-recently-active non-archived migrated session, otherwise a fresh
+   * blank v4 session. Mirrors MIGRATION_HANDOFF.md §5's "old activeSessionId
+   * may be used once to select the initial migrated session/view binding".
+   */
+  private async resolveActiveSessionId(): Promise<string> {
+    const remembered = await loadActiveSessionId(this.sessionAdapter);
+    if (remembered && await this.metadataStore.load(remembered)) {
+      return remembered;
+    }
+
+    const all = await this.metadataStore.list();
+    const candidate = all.find((entry) => !entry.metadata.isArchived) ?? all[0];
+    const resolved = candidate
+      ? candidate.metadata.id
+      : await this.createBlankSession();
+
+    await saveActiveSessionId(this.sessionAdapter, resolved);
+    return resolved;
+  }
+
+  private async createBlankSession(): Promise<string> {
+    const id = `s_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
+    const metadata = createSessionMetadata({
+      id,
+      title: "New chat",
+      selectedModel: this.settings.model,
+      upstreamProvider: this.settings.provider,
+      historyPath: this.historyStore.pathFor(id),
+      profileId: this.settings.activeProfileId,
+      reasoningEffort: this.settings.reasoningEffort,
+    });
+    await this.historyStore.replace(id, []);
+    await this.metadataStore.save(metadata);
+    await this.indexStore.upsert(toConversationMeta(metadata, { messageCount: 0, preview: "" }));
+    return id;
   }
 
   // ─── Settings persistence ────────────────────────────────────────────
@@ -659,6 +661,29 @@ export default class ChatPlugin extends Plugin {
   }
 }
 
+function deriveTitleFromMessages(messages: readonly UnifiedMessage[]): string | undefined {
+  const first = messages.find((m) => m.role === "user");
+  if (!first) return undefined;
+  const text = typeof first.content === "string"
+    ? first.content
+    : first.content.find((b) => b.type === "text" && b.text)?.text ?? "";
+  const clean = text.replace(/^\[Context:[^\]]*\]\n\n/, "").replace(/\s+/g, " ").trim();
+  if (!clean) return undefined;
+  return clean.length <= 64 ? clean : `${clean.slice(0, 61).trimEnd()}...`;
+}
+
+function derivePreviewFromMessages(messages: readonly UnifiedMessage[]): string {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const message = messages[i];
+    const text = typeof message.content === "string"
+      ? message.content
+      : message.content.find((b) => b.type === "text" && b.text)?.text ?? "";
+    const clean = text.replace(/\s+/g, " ").trim();
+    if (clean) return clean.length <= 120 ? clean : `${clean.slice(0, 117).trimEnd()}...`;
+  }
+  return "";
+}
+
 function normalizeSettings(value: unknown): Partial<ChatSettings> {
   if (!isRecord(value)) return {};
   const settings: Partial<ChatSettings> = {};
@@ -674,23 +699,7 @@ function normalizeSettings(value: unknown): Partial<ChatSettings> {
   } else {
     settings.activeProfileId = null;
   }
-  if (typeof value.maxConcurrentSessions === "number") {
-    settings.maxConcurrentSessions = clamp(value.maxConcurrentSessions, 1, 6);
-  }
-  if (typeof value.maxHydratedSessions === "number") {
-    settings.maxHydratedSessions = clamp(value.maxHydratedSessions, 2, 24);
-  }
-  if (typeof value.notifyBackgroundSessionCompletion === "boolean") {
-    settings.notifyBackgroundSessionCompletion = value.notifyBackgroundSessionCompletion;
-  }
-  if (typeof value.sessionManagerPinnedOnWideViews === "boolean") {
-    settings.sessionManagerPinnedOnWideViews = value.sessionManagerPinnedOnWideViews;
-  }
   return settings;
-}
-
-function clamp(value: number, min: number, max: number): number {
-  return Math.max(min, Math.min(max, Math.floor(value)));
 }
 
 function isProvider(value: unknown): value is ChatSettings["provider"] {
