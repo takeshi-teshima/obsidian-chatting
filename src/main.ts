@@ -263,14 +263,14 @@ export default class ChatPlugin extends Plugin {
     return null;
   }
 
-  private shareTranscript(): void {
+  private async shareTranscript(): Promise<void> {
     const view = this.getChatView();
     if (!view) {
       new Notice("No active conversation.");
       return;
     }
 
-    const transcript = view.getTranscript();
+    const transcript = await view.getTranscript();
     if (!transcript || transcript.endsWith("## Conversation\n\n")) {
       new Notice("Conversation is empty.");
       return;

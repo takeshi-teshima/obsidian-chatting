@@ -1,6 +1,7 @@
 import { App, TFile, normalizePath } from "obsidian";
 import type { ToolResult } from "../types";
 import { executePdfTool } from "../pdf/tools";
+import { executeSkillTool } from "../skills/tools";
 
 type AskUserCallback = (question: string) => Promise<string>;
 
@@ -51,6 +52,10 @@ export async function executeTool(
       case "pdf_read":
       case "pdf_search":
         return await executePdfTool(app, toolName, input);
+      case "list_skills":
+      case "read_skill":
+      case "read_skill_resource":
+        return await executeSkillTool(app, toolName, input);
       case "ask_user":
         return await askUser(input, onAskUser);
       default:
