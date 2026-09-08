@@ -1,72 +1,377 @@
-import type { SessionStorageAdapter } from "../storage-adapter";
 import type { ConversationMeta } from "../metadata/types";
-import { sortConversationMeta } from "./derived-index";
+import type { SessionStorageAdapter } from "../storage-adapter";
+import type { SessionQuery, SessionQueryResult, SessionStoreStats } from "../runtime/types";
+import { SerialQueue } from "../runtime/async-lock";
 
-export const DEFAULT_SESSION_INDEX_ROOT = ".chatting/session-index";
-export const SESSION_INDEX_HOT_PATH = `${DEFAULT_SESSION_INDEX_ROOT}/hot.json`;
 export const SESSION_INDEX_SCHEMA_VERSION = 1 as const;
+export const SESSION_INDEX_SHARDS = 64 as const;
+export const SESSION_HOT_RECENT_LIMIT = 512 as const;
+export const DEFAULT_SESSION_INDEX_ROOT = ".chatting/session-index";
 
-interface SessionIndexFile {
+interface SessionIndexManifest {
   schemaVersion: typeof SESSION_INDEX_SCHEMA_VERSION;
-  entries: ConversationMeta[];
+  generation: number;
+  activeCount: number;
+  archivedCount: number;
+  pinnedCount: number;
+  shardCount: typeof SESSION_INDEX_SHARDS;
+  hotRecentLimit: typeof SESSION_HOT_RECENT_LIMIT;
+  hotNeedsRefill?: boolean;
+  lastRebuildAt?: number;
+}
+
+interface SessionIndexShard {
+  schemaVersion: typeof SESSION_INDEX_SCHEMA_VERSION;
+  generation: number;
+  items: ConversationMeta[];
+}
+
+export interface SessionIndexInitializeResult {
+  rebuilt: boolean;
+  stats: SessionStoreStats;
 }
 
 /**
- * Simplified derived/rebuildable navigation index.
+ * Disposable/rebuildable navigation index. Canonical data remains
+ * SessionMetadata + Chatting provider-native JSONL history.
  *
- * STORAGE_AND_SCALE.md describes a 64-way sharded `session-index/` cache for
- * very large session counts (ported from the v3 hot/sharded catalog). This
- * single-file "hot" implementation intentionally covers the common case
- * (dozens to low thousands of sessions) with the same contract — derived,
- * disposable, never canonical, rebuildable from `session-metadata/*.meta.json`
- * without hydrating every transcript. Sharding is a follow-up scale
- * optimization the migration/runtime contract does not require to land in
- * this pass; nothing here forecloses moving `entries` into per-shard files
- * later since callers only see `list()`/`upsert()`/`remove()`.
+ * Startup reads only manifest.json + hot.json. Archive/search/deep pagination
+ * lazily read the 64 metadata shards, never transcripts.
  */
 export class SessionIndexStore {
+  private readonly manifestPath: string;
+  private readonly hotPath: string;
+  private readonly shardsRoot: string;
+  private manifest: SessionIndexManifest | null = null;
+  private hot: SessionIndexShard | null = null;
+  private allCache: ConversationMeta[] | null = null;
+  private readonly shardCache = new Map<string, SessionIndexShard>();
+  /**
+   * manifest.json/hot.json (and, per-key, each shard file) are shared
+   * singleton state written by every session's checkpoint/finish path. Since
+   * different sessions are explicitly allowed to run concurrently (that's
+   * the whole point of the multi-session runtime), upsert()/remove()/
+   * rebuild() calls from two sessions completing turns at nearly the same
+   * moment must never interleave their write-tmp/rename-to-bak/rename-to-
+   * final sequences on these shared files, or one write's rename can find
+   * the path already moved by the other and throw ENOENT. All mutations
+   * are therefore funneled through this single queue.
+   */
+  private readonly writeQueue = new SerialQueue();
+
   constructor(
     private readonly adapter: SessionStorageAdapter,
-    private readonly path = SESSION_INDEX_HOT_PATH,
-  ) {}
+    private readonly root = DEFAULT_SESSION_INDEX_ROOT,
+  ) {
+    this.manifestPath = `${root}/manifest.json`;
+    this.hotPath = `${root}/hot.json`;
+    this.shardsRoot = `${root}/shards`;
+  }
 
-  async load(): Promise<ConversationMeta[]> {
-    if (!await this.adapter.exists(this.path)) return [];
-    try {
-      const parsed: unknown = JSON.parse(await this.adapter.read(this.path));
-      if (!isIndexFile(parsed)) return [];
-      return parsed.entries;
-    } catch {
-      return [];
+  async initialize(rebuildSource: () => Promise<ConversationMeta[]>): Promise<SessionIndexInitializeResult> {
+    await this.adapter.ensureFolder(this.root);
+    await this.adapter.ensureFolder(this.shardsRoot);
+    this.manifest = await this.readJson(this.manifestPath, isManifest);
+    this.hot = await this.readJson(this.hotPath, isShard);
+    let rebuilt = false;
+    if (!this.manifest || !this.hot) {
+      await this.rebuild(await rebuildSource());
+      rebuilt = true;
     }
+    return { rebuilt, stats: await this.getStats() };
   }
 
-  async save(entries: readonly ConversationMeta[]): Promise<void> {
-    const dir = this.path.split("/").slice(0, -1).join("/");
-    if (dir) await this.adapter.ensureFolder(dir);
-    const file: SessionIndexFile = {
-      schemaVersion: SESSION_INDEX_SCHEMA_VERSION,
-      entries: sortConversationMeta(entries),
+  async getStats(): Promise<SessionStoreStats> {
+    const manifest = this.requireManifest();
+    return {
+      activeCount: manifest.activeCount,
+      archivedCount: manifest.archivedCount,
+      pinnedCount: manifest.pinnedCount,
     };
-    await this.adapter.write(this.path, JSON.stringify(file, null, 2));
   }
 
-  async upsert(entry: ConversationMeta): Promise<void> {
-    const entries = await this.load();
-    const next = [...entries.filter((e) => e.id !== entry.id), entry];
-    await this.save(next);
+  async get(id: string): Promise<ConversationMeta | null> {
+    const hot = this.requireHot().items.find((item) => item.id === id);
+    if (hot) return { ...hot };
+    const shard = await this.loadShard(metadataShardOf(id));
+    return shard.items.find((item) => item.id === id) ?? null;
   }
 
-  async remove(id: string): Promise<void> {
-    const entries = await this.load();
-    await this.save(entries.filter((e) => e.id !== id));
+  async query(query: SessionQuery): Promise<SessionQueryResult> {
+    const offset = Math.max(0, query.offset ?? 0);
+    const limit = clamp(query.limit ?? 50, 1, 200);
+    const search = query.search?.trim().toLocaleLowerCase() ?? "";
+    const sort = query.sort ?? "activity";
+
+    const canUseHot = !search
+      && query.scope !== "archived"
+      && offset + limit <= SESSION_HOT_RECENT_LIMIT;
+    const source = canUseHot ? this.requireHot().items : await this.loadAll();
+    const filtered = source.filter((item) => {
+      if (query.scope === "archived") {
+        if (!item.isArchived) return false;
+      } else if (query.scope === "pinned") {
+        if (item.isArchived || !item.isPinned) return false;
+      } else if (item.isArchived) {
+        return false;
+      }
+      if (!search) return true;
+      return [item.title, item.preview, item.providerId, item.selectedModel ?? ""]
+        .some((value) => value.toLocaleLowerCase().includes(search));
+    });
+    filtered.sort((a, b) => compareMeta(a, b, sort));
+
+    const total = canUseHot
+      ? this.totalForHotScope(query.scope)
+      : filtered.length;
+    const items = filtered.slice(offset, offset + limit).map((item) => ({ ...item }));
+    const nextOffset = offset + items.length < total ? offset + items.length : null;
+    return { items, total, offset, nextOffset };
+  }
+
+  async upsert(next: ConversationMeta, previous: ConversationMeta | null = null): Promise<void> {
+    await this.writeQueue.run(async () => {
+      const manifest = this.requireManifest();
+      const generation = manifest.generation + 1;
+      applyManifestTransition(manifest, previous, next);
+      manifest.generation = generation;
+
+      const key = metadataShardOf(next.id);
+      const shard = await this.loadShard(key);
+      shard.items = shard.items.filter((item) => item.id !== next.id);
+      shard.items.push({ ...next });
+      shard.generation = generation;
+      await this.writeShard(key, shard);
+
+      this.updateHot(next, previous, generation);
+      await this.writeManifestAndHot();
+      if (this.allCache) {
+        this.allCache = this.allCache.filter((item) => item.id !== next.id);
+        this.allCache.push({ ...next });
+      }
+    });
+  }
+
+  async remove(id: string, previous: ConversationMeta | null): Promise<void> {
+    await this.writeQueue.run(async () => {
+      const manifest = this.requireManifest();
+      const generation = manifest.generation + 1;
+      applyManifestTransition(manifest, previous, null);
+      manifest.generation = generation;
+
+      const key = metadataShardOf(id);
+      const shard = await this.loadShard(key);
+      shard.items = shard.items.filter((item) => item.id !== id);
+      shard.generation = generation;
+      await this.writeShard(key, shard);
+
+      const hot = this.requireHot();
+      const wasHot = hot.items.some((item) => item.id === id);
+      hot.items = hot.items.filter((item) => item.id !== id);
+      hot.generation = generation;
+      if (wasHot && manifest.activeCount > hot.items.length) manifest.hotNeedsRefill = true;
+      await this.writeManifestAndHot();
+      if (this.allCache) this.allCache = this.allCache.filter((item) => item.id !== id);
+    });
+  }
+
+  async rebuild(items: readonly ConversationMeta[]): Promise<void> {
+    await this.writeQueue.run(async () => {
+      await this.adapter.ensureFolder(this.root);
+      await this.adapter.ensureFolder(this.shardsRoot);
+      this.shardCache.clear();
+      this.allCache = items.map((item) => ({ ...item }));
+      const generation = (this.manifest?.generation ?? 0) + 1;
+
+      const grouped = new Map<string, ConversationMeta[]>();
+      for (const item of items) {
+        const key = metadataShardOf(item.id);
+        const bucket = grouped.get(key) ?? [];
+        bucket.push({ ...item });
+        grouped.set(key, bucket);
+      }
+      for (let i = 0; i < SESSION_INDEX_SHARDS; i++) {
+        const key = i.toString(16).padStart(2, "0");
+        const shard: SessionIndexShard = {
+          schemaVersion: SESSION_INDEX_SCHEMA_VERSION,
+          generation,
+          items: grouped.get(key) ?? [],
+        };
+        this.shardCache.set(key, shard);
+        await this.writeJson(this.shardPath(key), shard);
+      }
+
+      this.manifest = manifestFor(items, generation);
+      this.hot = buildHot(items, generation);
+      await this.writeManifestAndHot();
+    });
+  }
+
+  async refillHotIfNeeded(): Promise<boolean> {
+    return this.writeQueue.run(async () => {
+      const manifest = this.requireManifest();
+      if (!manifest.hotNeedsRefill) return false;
+      const all = await this.loadAll();
+      this.hot = buildHot(all, manifest.generation);
+      delete manifest.hotNeedsRefill;
+      await this.writeManifestAndHot();
+      return true;
+    });
+  }
+
+  private totalForHotScope(scope: SessionQuery["scope"]): number {
+    const manifest = this.requireManifest();
+    if (scope === "pinned") return manifest.pinnedCount;
+    if (scope === "archived") return manifest.archivedCount;
+    return manifest.activeCount;
+  }
+
+  private async loadAll(): Promise<ConversationMeta[]> {
+    if (this.allCache) return this.allCache.map((item) => ({ ...item }));
+    const all: ConversationMeta[] = [];
+    for (let i = 0; i < SESSION_INDEX_SHARDS; i++) {
+      const key = i.toString(16).padStart(2, "0");
+      const shard = await this.loadShard(key);
+      all.push(...shard.items.map((item) => ({ ...item })));
+    }
+    this.allCache = all;
+    return all.map((item) => ({ ...item }));
+  }
+
+  private async loadShard(key: string): Promise<SessionIndexShard> {
+    const cached = this.shardCache.get(key);
+    if (cached) return cached;
+    const loaded = await this.readJson(this.shardPath(key), isShard)
+      ?? { schemaVersion: SESSION_INDEX_SCHEMA_VERSION, generation: 0, items: [] };
+    this.shardCache.set(key, loaded);
+    return loaded;
+  }
+
+  private updateHot(next: ConversationMeta, previous: ConversationMeta | null, generation: number): void {
+    const manifest = this.requireManifest();
+    const hot = this.requireHot();
+    const wasHot = hot.items.some((item) => item.id === next.id);
+    hot.items = hot.items.filter((item) => item.id !== next.id);
+    if (!next.isArchived) hot.items.push({ ...next });
+    const pinned = hot.items.filter((item) => !item.isArchived && item.isPinned).sort(compareActivity);
+    const pinnedIds = new Set(pinned.map((item) => item.id));
+    const recent = hot.items
+      .filter((item) => !item.isArchived && !pinnedIds.has(item.id))
+      .sort(compareActivity)
+      .slice(0, SESSION_HOT_RECENT_LIMIT);
+    hot.items = [...pinned, ...recent];
+    hot.generation = generation;
+    if (wasHot && next.isArchived && manifest.activeCount > hot.items.length) manifest.hotNeedsRefill = true;
+    if (previous?.isPinned && !next.isPinned && manifest.activeCount > hot.items.length) manifest.hotNeedsRefill = true;
+  }
+
+  private requireManifest(): SessionIndexManifest {
+    if (!this.manifest) throw new Error("SessionIndexStore not initialized");
+    return this.manifest;
+  }
+  private requireHot(): SessionIndexShard {
+    if (!this.hot) throw new Error("SessionIndexStore not initialized");
+    return this.hot;
+  }
+  private shardPath(key: string): string { return `${this.shardsRoot}/${key}.json`; }
+
+  private async writeShard(key: string, shard: SessionIndexShard): Promise<void> {
+    this.shardCache.set(key, shard);
+    await this.writeJson(this.shardPath(key), shard);
+  }
+  private async writeManifestAndHot(): Promise<void> {
+    await this.writeJson(this.manifestPath, this.requireManifest());
+    await this.writeJson(this.hotPath, this.requireHot());
+  }
+  private async writeJson(path: string, value: unknown): Promise<void> {
+    const text = JSON.stringify(value);
+    JSON.parse(text);
+    const tmp = `${path}.tmp`;
+    const bak = `${path}.bak`;
+    await this.adapter.write(tmp, text);
+    if (await this.adapter.exists(path)) {
+      if (await this.adapter.exists(bak)) await this.adapter.remove(bak);
+      await this.adapter.rename(path, bak);
+    }
+    await this.adapter.rename(tmp, path);
+  }
+  private async readJson<T>(path: string, guard: (value: unknown) => value is T): Promise<T | null> {
+    for (const candidate of [path, `${path}.tmp`, `${path}.bak`]) {
+      try {
+        if (!await this.adapter.exists(candidate)) continue;
+        const value = JSON.parse(await this.adapter.read(candidate)) as unknown;
+        if (guard(value)) return value;
+      } catch { /* fallback */ }
+    }
+    return null;
   }
 }
 
-function isIndexFile(value: unknown): value is SessionIndexFile {
-  return (
-    !!value
-    && typeof value === "object"
-    && Array.isArray((value as SessionIndexFile).entries)
-  );
+export function metadataShardOf(id: string): string {
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < id.length; i++) {
+    hash ^= id.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193) >>> 0;
+  }
+  return (hash % SESSION_INDEX_SHARDS).toString(16).padStart(2, "0");
 }
+
+function manifestFor(items: readonly ConversationMeta[], generation: number): SessionIndexManifest {
+  return {
+    schemaVersion: SESSION_INDEX_SCHEMA_VERSION,
+    generation,
+    activeCount: items.filter((item) => !item.isArchived).length,
+    archivedCount: items.filter((item) => item.isArchived).length,
+    pinnedCount: items.filter((item) => !item.isArchived && item.isPinned).length,
+    shardCount: SESSION_INDEX_SHARDS,
+    hotRecentLimit: SESSION_HOT_RECENT_LIMIT,
+    lastRebuildAt: Date.now(),
+  };
+}
+
+function buildHot(items: readonly ConversationMeta[], generation: number): SessionIndexShard {
+  const active = items.filter((item) => !item.isArchived);
+  const pinned = active.filter((item) => item.isPinned).sort(compareActivity);
+  const pinnedIds = new Set(pinned.map((item) => item.id));
+  const recent = active.filter((item) => !pinnedIds.has(item.id)).sort(compareActivity).slice(0, SESSION_HOT_RECENT_LIMIT);
+  return { schemaVersion: SESSION_INDEX_SCHEMA_VERSION, generation, items: [...pinned, ...recent] };
+}
+
+function applyManifestTransition(manifest: SessionIndexManifest, previous: ConversationMeta | null, next: ConversationMeta | null): void {
+  if (previous) {
+    if (previous.isArchived) manifest.archivedCount = Math.max(0, manifest.archivedCount - 1);
+    else manifest.activeCount = Math.max(0, manifest.activeCount - 1);
+    if (!previous.isArchived && previous.isPinned) manifest.pinnedCount = Math.max(0, manifest.pinnedCount - 1);
+  }
+  if (next) {
+    if (next.isArchived) manifest.archivedCount++;
+    else manifest.activeCount++;
+    if (!next.isArchived && next.isPinned) manifest.pinnedCount++;
+  }
+}
+function compareActivity(a: ConversationMeta, b: ConversationMeta): number {
+  return b.lastActivityAt - a.lastActivityAt || b.createdAt - a.createdAt || a.id.localeCompare(b.id);
+}
+function compareMeta(a: ConversationMeta, b: ConversationMeta, by: "activity" | "created"): number {
+  const left = by === "activity" ? a.lastActivityAt : a.createdAt;
+  const right = by === "activity" ? b.lastActivityAt : b.createdAt;
+  return right - left || a.title.localeCompare(b.title) || a.id.localeCompare(b.id);
+}
+function isManifest(value: unknown): value is SessionIndexManifest {
+  if (!isRecord(value)) return false;
+  return value.schemaVersion === SESSION_INDEX_SCHEMA_VERSION
+    && finite(value.generation) && finite(value.activeCount) && finite(value.archivedCount) && finite(value.pinnedCount)
+    && value.shardCount === SESSION_INDEX_SHARDS && value.hotRecentLimit === SESSION_HOT_RECENT_LIMIT;
+}
+function isShard(value: unknown): value is SessionIndexShard {
+  return isRecord(value) && value.schemaVersion === SESSION_INDEX_SCHEMA_VERSION
+    && finite(value.generation) && Array.isArray(value.items) && value.items.every(isConversationMeta);
+}
+function isConversationMeta(value: unknown): value is ConversationMeta {
+  if (!isRecord(value)) return false;
+  return typeof value.id === "string" && typeof value.providerId === "string" && typeof value.title === "string"
+    && finite(value.createdAt) && finite(value.lastActivityAt) && finite(value.messageCount) && typeof value.preview === "string";
+}
+function isRecord(value: unknown): value is Record<string, unknown> { return !!value && typeof value === "object" && !Array.isArray(value); }
+function finite(value: unknown): value is number { return typeof value === "number" && Number.isFinite(value) && value >= 0; }
+function clamp(value: number, min: number, max: number): number { return Math.max(min, Math.min(max, value)); }

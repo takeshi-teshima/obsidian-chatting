@@ -5,10 +5,18 @@ import {
   assertImageRefEnvelope,
   type ImageResolver,
 } from "../context/image-resolver";
+import type { ProviderConversationState } from "./provider-session-state";
 
 export interface ProviderRequestContext {
   /** Present for normal AgentLoop requests; optional for text-only connection tests. */
   images?: ImageResolver;
+  /**
+   * Session-local Responses API continuation state. Optional for text-only
+   * connection tests (which never need multi-turn chaining); every AgentLoop
+   * request must pass its own instance so concurrent sessions never share
+   * `previous_response_id`.
+   */
+  providerConversation?: ProviderConversationState;
 }
 
 export function imageRefsForMessage(message: UnifiedMessage): ContextRef[] {
