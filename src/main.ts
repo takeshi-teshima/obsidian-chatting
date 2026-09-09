@@ -484,7 +484,14 @@ export default class ChatPlugin extends Plugin {
       console.error("[chatting-with-ai] v4 migration failed to run", error);
     }
 
-    await this.sessionStore.initialize();
+    const indexInit = await this.sessionStore.initialize();
+    if (indexInit.quarantinedIndexPaths.length > 0) {
+      new Notice(
+        `Detected ${indexInit.quarantinedIndexPaths.length} sync-conflict file(s) in the session index ` +
+          `(likely from editing on two devices at once) — moved to .chatting/sync-conflicts/ and rebuilt the index.`
+      );
+      console.warn("[chatting-with-ai] quarantined session-index sync-conflict files", indexInit.quarantinedIndexPaths);
+    }
 
     // If no session exists at all yet (fresh vault, migration produced
     // nothing), seed exactly one blank session so the first view has
