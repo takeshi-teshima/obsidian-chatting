@@ -23,10 +23,12 @@
     "codex:smoke": "node test/codex-smoke.mjs"
   },
   "dependencies": {
-    "pdfjs-dist": "6.2.108"
+    "pdfjs-dist": "6.2.108",
+    "sortablejs": "^1.15.7"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
+    "@types/sortablejs": "^1.15.9",
     "esbuild": "^0.24.0",
     "esbuild-svelte": "^0.9.4",
     "obsidian": "^1.11.4",

@@ -1,4 +1,5 @@
 import { App, Modal, Notice, PluginSettingTab, Setting, requestUrl, setIcon } from "obsidian";
+import Sortable from "sortablejs";
 import type ChatPlugin from "./main";
 import type { Provider, ChatSettings } from "./types";
 import { CHATGPT_OAUTH_DEFAULT_MODEL } from "./types";
@@ -504,13 +505,11 @@ class ModelCatalogModal extends Modal {
     const current = s.customModelCatalog?.[this.provider] ?? [...(FALLBACK_MODELS[this.provider] ?? [])];
 
     const listEl = contentEl.createDiv({ cls: "ochatting-model-catalog-list" });
-    const modelByValue = new Map(current.map((m) => [m.value, m]));
 
     current.forEach((model, index) => {
       const row = new Setting(listEl)
         .setName(model.label)
         .setDesc(model.value);
-      row.settingEl.dataset.modelValue = model.value;
       if (index === 0) {
         row.nameEl.createSpan({ text: " Default", cls: "ochatting-model-catalog-default-badge" });
       }
@@ -518,22 +517,13 @@ class ModelCatalogModal extends Modal {
       // Drag handle, prepended to the left of the row's usual info/control
       // layout (`.setting-item` is a flex row, so this just becomes an
       // extra leading flex child — no layout changes needed elsewhere).
+      // SortableJS (see the `Sortable.create()` call below, after this
+      // loop) does the actual drag/drop; this element is only its `handle`
+      // selector target, so grabbing anywhere else in the row doesn't
+      // start a drag.
       const gripEl = createDiv({ cls: "ochatting-model-catalog-grip", attr: { "aria-label": "Drag to reorder" } });
       setIcon(gripEl, "grip-vertical");
       row.settingEl.prepend(gripEl);
-      this.attachDragHandle(gripEl, row.settingEl, listEl, () => {
-        // Persist whatever order the rows are DOM-sorted into after a
-        // completed drag, then re-render so the "Default" badge and every
-        // handler's captured `index`/`current` are recomputed against the
-        // new order (index-based closures above would otherwise go stale).
-        const orderedValues = Array.from(listEl.children)
-          .map((el) => (el as HTMLElement).dataset.modelValue)
-          .filter((v): v is string => !!v);
-        const reordered = orderedValues
-          .map((value) => modelByValue.get(value))
-          .filter((m): m is ModelOption => !!m);
-        void writeCustomCatalog(this.plugin, this.provider, reordered).then(() => this.render());
-      });
 
       row.addButton((btn) =>
         btn
@@ -545,6 +535,24 @@ class ModelCatalogModal extends Modal {
             this.render();
           })
       );
+    });
+
+    // Drag-to-reorder: SortableJS (MIT, see THIRD_PARTY_LICENSES.md) rather
+    // than a hand-rolled Pointer Events implementation — an earlier custom
+    // version of this modal tried that and it was unreliable on desktop.
+    // SortableJS handles mouse/touch/pen itself; `handle` restricts the
+    // drag-start target to the grip icon so grabbing the row's text/buttons
+    // doesn't start a drag.
+    Sortable.create(listEl, {
+      handle: ".ochatting-model-catalog-grip",
+      animation: 150,
+      onEnd: (evt) => {
+        if (evt.oldIndex === undefined || evt.newIndex === undefined || evt.oldIndex === evt.newIndex) return;
+        const reordered = [...current];
+        const [moved] = reordered.splice(evt.oldIndex, 1);
+        reordered.splice(evt.newIndex, 0, moved);
+        void writeCustomCatalog(this.plugin, this.provider, reordered).then(() => this.render());
+      },
     });
 
     // Add-a-custom-model-ID: appended to the end (not the default) unless
@@ -626,106 +634,6 @@ class ModelCatalogModal extends Modal {
     );
   }
 
-  /**
-   * Pointer-based drag-to-reorder, bound to a small grip handle rather than
-   * the whole row (so it doesn't fight with normal taps/scrolling
-   * elsewhere in the modal). Uses the Pointer Events API — NOT HTML5 native
-   * drag-and-drop, which doesn't work reliably on touch — so the same code
-   * path covers mouse (drag starts immediately) and touch/pen (a
-   * long-press is required first, so an ordinary scroll-swipe that happens
-   * to start on the handle doesn't get hijacked into a reorder).
-   *
-   * Deliberately simple for a short list (a handful of models): on every
-   * pointermove past a sibling row's vertical midpoint, the dragged row's
-   * DOM node is physically moved in `listEl` — no transform/animation math,
-   * no parallel array to keep in sync. `onDrop` reads the final order
-   * straight back out of the DOM (`listEl.children`'s `dataset.modelValue`
-   * order) once the drag ends.
-   */
-  private attachDragHandle(
-    handleEl: HTMLElement,
-    rowEl: HTMLElement,
-    listEl: HTMLElement,
-    onDrop: () => void,
-  ): void {
-    const LONG_PRESS_MS = 350;
-    const MOVE_CANCEL_THRESHOLD_PX = 8;
-
-    let pointerId: number | null = null;
-    let dragging = false;
-    let startY = 0;
-    let longPressTimer: number | undefined;
-
-    const cancelLongPress = () => {
-      if (longPressTimer !== undefined) {
-        window.clearTimeout(longPressTimer);
-        longPressTimer = undefined;
-      }
-    };
-
-    const startDrag = () => {
-      dragging = true;
-      rowEl.addClass("ochatting-model-catalog-row-dragging");
-    };
-
-    const onPointerMove = (e: PointerEvent) => {
-      if (e.pointerId !== pointerId) return;
-      if (!dragging) {
-        // Touch/pen: moving before the long-press fires means this was a
-        // scroll attempt, not a reorder — abandon it and let the browser's
-        // normal scrolling take over (we never called preventDefault yet).
-        if (Math.abs(e.clientY - startY) > MOVE_CANCEL_THRESHOLD_PX) cancelLongPress();
-        return;
-      }
-      e.preventDefault();
-      const siblings = Array.from(listEl.children).filter((el) => el !== rowEl) as HTMLElement[];
-      let target: HTMLElement | null = null;
-      for (const sibling of siblings) {
-        const rect = sibling.getBoundingClientRect();
-        if (e.clientY < rect.top + rect.height / 2) {
-          target = sibling;
-          break;
-        }
-      }
-      if (target) listEl.insertBefore(rowEl, target);
-      else listEl.appendChild(rowEl);
-    };
-
-    const finish = (e: PointerEvent) => {
-      if (e.pointerId !== pointerId) return;
-      cancelLongPress();
-      try { handleEl.releasePointerCapture(e.pointerId); } catch { /* already released */ }
-      handleEl.removeEventListener("pointermove", onPointerMove);
-      handleEl.removeEventListener("pointerup", finish);
-      handleEl.removeEventListener("pointercancel", finish);
-      pointerId = null;
-      const wasDragging = dragging;
-      dragging = false;
-      rowEl.removeClass("ochatting-model-catalog-row-dragging");
-      if (wasDragging) onDrop();
-    };
-
-    handleEl.addEventListener("pointerdown", (e: PointerEvent) => {
-      if (e.pointerType === "mouse" && e.button !== 0) return;
-      // Suppress native drag-start/text-selection so it can't fight with
-      // (or visually mask) our own pointermove-driven reorder below.
-      e.preventDefault();
-      pointerId = e.pointerId;
-      startY = e.clientY;
-      handleEl.setPointerCapture(e.pointerId);
-      handleEl.addEventListener("pointermove", onPointerMove);
-      handleEl.addEventListener("pointerup", finish);
-      handleEl.addEventListener("pointercancel", finish);
-      if (e.pointerType === "mouse") {
-        startDrag();
-      } else {
-        longPressTimer = window.setTimeout(() => {
-          longPressTimer = undefined;
-          startDrag();
-        }, LONG_PRESS_MS);
-      }
-    });
-  }
 }
 
 // ─── Device-flow login modal ────────────────────────────────────────────────
