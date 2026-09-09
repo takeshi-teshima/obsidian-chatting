@@ -20,6 +20,7 @@ const checkFiles = [
   "model-selection.check.ts",
   "model-catalog-persistence.check.ts",
   "title-generation.check.ts",
+  "settings-round-trip.check.ts",
 ];
 
 let anyFailed = false;

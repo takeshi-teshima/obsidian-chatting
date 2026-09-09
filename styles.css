@@ -226,6 +226,11 @@
   cursor: grab;
   touch-action: none;
   flex-shrink: 0;
+  /* Without this, a mousedown+drag on the handle can trigger the browser's
+     native text/element selection instead of (or fighting with) our
+     pointermove-driven reorder logic. */
+  -webkit-user-select: none;
+  user-select: none;
 }
 
 .ochatting-model-catalog-grip:active {

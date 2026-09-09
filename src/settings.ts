@@ -707,6 +707,9 @@ class ModelCatalogModal extends Modal {
 
     handleEl.addEventListener("pointerdown", (e: PointerEvent) => {
       if (e.pointerType === "mouse" && e.button !== 0) return;
+      // Suppress native drag-start/text-selection so it can't fight with
+      // (or visually mask) our own pointermove-driven reorder below.
+      e.preventDefault();
       pointerId = e.pointerId;
       startY = e.clientY;
       handleEl.setPointerCapture(e.pointerId);
