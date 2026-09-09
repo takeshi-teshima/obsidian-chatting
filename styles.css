@@ -211,10 +211,11 @@
   vertical-align: middle;
 }
 
-/* ModelCatalogModal: drag-to-reorder handle. touch-action:none so a
-   press-and-drag on this specific icon isn't fought by the browser trying
-   to scroll the modal at the same time — normal scrolling elsewhere in the
-   modal (i.e. not starting on the handle) is unaffected. */
+/* ModelCatalogModal: drag-to-reorder handle (SortableJS's `handle` option
+   restricts drag-start to this element; SortableJS itself handles
+   mouse/touch/pen). touch-action:none so a press-and-drag on this specific
+   icon isn't fought by the browser trying to scroll the modal at the same
+   time — normal scrolling elsewhere in the modal is unaffected. */
 .ochatting-model-catalog-grip {
   display: flex;
   align-items: center;
@@ -226,9 +227,6 @@
   cursor: grab;
   touch-action: none;
   flex-shrink: 0;
-  /* Without this, a mousedown+drag on the handle can trigger the browser's
-     native text/element selection instead of (or fighting with) our
-     pointermove-driven reorder logic. */
   -webkit-user-select: none;
   user-select: none;
 }
@@ -237,7 +235,11 @@
   cursor: grabbing;
 }
 
-.ochatting-model-catalog-row-dragging {
-  opacity: 0.6;
+/* SortableJS's built-in state classes for the row currently being dragged. */
+.ochatting-model-catalog-list .sortable-ghost {
+  opacity: 0.4;
+}
+
+.ochatting-model-catalog-list .sortable-chosen {
   background: var(--background-modifier-hover);
 }
