@@ -36,6 +36,8 @@ export interface SessionWorkspaceStoreInitializeResult {
   stats: SessionStoreStats;
   /** See `SessionIndexInitializeResult.quarantinedPaths`. Empty on a normal startup. */
   quarantinedIndexPaths: string[];
+  /** See `SessionIndexInitializeResult.rebuildRefused`. */
+  indexRebuildRefused: boolean;
 }
 
 /**
@@ -54,7 +56,12 @@ export class SessionWorkspaceStore {
 
   async initialize(): Promise<SessionWorkspaceStoreInitializeResult> {
     const result = await this.index.initialize(() => this.rebuildIndexSource());
-    return { indexRebuilt: result.rebuilt, stats: result.stats, quarantinedIndexPaths: result.quarantinedPaths };
+    return {
+      indexRebuilt: result.rebuilt,
+      stats: result.stats,
+      quarantinedIndexPaths: result.quarantinedPaths,
+      indexRebuildRefused: result.rebuildRefused,
+    };
   }
 
   async create(input: CreateSessionInput = {}): Promise<LoadedSessionWorkspace> {
