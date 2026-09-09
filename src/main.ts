@@ -10,6 +10,7 @@ import {
 import type { ChatSettings, Provider, SelectionScope } from "./types";
 import { DEFAULT_SETTINGS, CHATGPT_OAUTH_DEFAULT_MODEL } from "./types";
 import { ChatSettingTab, getModelOptions, setSettingsSource } from "./settings";
+import { normalizeSettings, isProvider, isReasoningEffort } from "./settings-normalize";
 import { migrateLegacyModelSelection, readModelSelectionSeed } from "./model-selection/settings-migration";
 import { ModelSelectionSeedCoordinator } from "./model-selection/seed-coordinator";
 import { ObsidianChatView, VIEW_TYPE_CHAT } from "./ui/chat-view";
@@ -946,41 +947,10 @@ export default class ChatPlugin extends Plugin {
   }
 }
 
-function normalizeSettings(value: unknown): Partial<ChatSettings> {
-  if (!isRecord(value)) return {};
-  const settings: Partial<ChatSettings> = {};
-  if (isProvider(value.provider)) settings.provider = value.provider;
-  if (typeof value.apiKey === "string") settings.apiKey = value.apiKey;
-  if (typeof value.model === "string") settings.model = value.model;
-  if (typeof value.maxIterations === "number") settings.maxIterations = value.maxIterations;
-  if (typeof value.enableWebSearch === "boolean") settings.enableWebSearch = value.enableWebSearch;
-  if (isReasoningEffort(value.reasoningEffort)) settings.reasoningEffort = value.reasoningEffort;
-  if (typeof value.customInstructions === "string") settings.customInstructions = value.customInstructions;
-  if (typeof value.activeProfileId === "string" && value.activeProfileId.trim()) {
-    settings.activeProfileId = value.activeProfileId;
-  } else {
-    settings.activeProfileId = null;
-  }
-  return settings;
-}
-
-function isProvider(value: unknown): value is ChatSettings["provider"] {
-  return value === "anthropic" || value === "openai" || value === "chatgpt-oauth";
-}
-
-function isReasoningEffort(value: unknown): value is ChatSettings["reasoningEffort"] {
-  return (
-    value === "auto" ||
-    value === "low" ||
-    value === "medium" ||
-    value === "high" ||
-    value === "max"
-  );
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
-}
+// normalizeSettings/isProvider/isReasoningEffort/isRecord moved to
+// src/settings-normalize.ts (Obsidian-free, so a plain-Node regression test
+// can exercise the data-durability guarantee directly — see that file's
+// doc comment for the real bug this fixed).
 
 // ─── Settings migrations ─────────────────────────────────────────────────────
 
