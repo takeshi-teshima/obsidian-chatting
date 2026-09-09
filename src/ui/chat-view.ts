@@ -111,6 +111,8 @@ export class ObsidianChatView extends ItemView {
   private readonly selectionCoordinator: ComposerSelectionCoordinator;
 
   private sessionBarTitleEl: HTMLElement | undefined;
+  /** Disabled whenever the bound session is pristine (0 messages) — see `updateSessionBarTitle()`. */
+  private newConversationBtn: HTMLButtonElement | undefined;
 
   /**
    * Live pane-width layout observer (Session Workspaces v4.1, branch 11:
@@ -197,8 +199,8 @@ export class ObsidianChatView extends ItemView {
     const sessionBar = container.createDiv({ cls: "ochatting-session-bar" });
     this.sessionBarTitleEl = sessionBar.createSpan({ cls: "ochatting-session-bar-title", text: "Loading…" });
     this.sessionBarTitleEl.onClickEvent(() => this.openSwitcher());
-    const newBtn = sessionBar.createEl("button", { cls: "ochatting-session-bar-btn", text: "+", attr: { title: "New conversation" } });
-    newBtn.onClickEvent(() => void this.createAndSwitchToNewSession());
+    this.newConversationBtn = sessionBar.createEl("button", { cls: "ochatting-session-bar-btn", text: "+", attr: { title: "New conversation" } });
+    this.newConversationBtn.onClickEvent(() => void this.createAndSwitchToNewSession());
     const menuBtn = sessionBar.createEl("button", { cls: "ochatting-session-bar-btn", text: "⋯", attr: { title: "Conversation actions" } });
     menuBtn.onClickEvent((evt) => this.openSessionMenu(evt));
 
@@ -351,6 +353,15 @@ export class ObsidianChatView extends ItemView {
     if (this.sessionBarTitleEl) {
       const pin = snapshot.metadata.isPinned ? "📌 " : "";
       this.sessionBarTitleEl.setText(`${pin}${snapshot.metadata.title || "New chat"}`);
+    }
+    // A pristine (0-message) session IS already "a completely new,
+    // unused chat" — creating yet another one via "+" would just abandon
+    // this empty one and leave it sitting around. Disable "+" until the
+    // bound session actually has something in it; re-enabled automatically
+    // the moment the first message lands (this runs on every snapshot,
+    // including right after a send).
+    if (this.newConversationBtn) {
+      this.newConversationBtn.disabled = snapshot.messages.length === 0;
     }
   }
 

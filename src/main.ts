@@ -560,8 +560,7 @@ export default class ChatPlugin extends Plugin {
   private async generateSessionTitle(input: {
     sessionId: string;
     metadata: SessionMetadata;
-    firstUserText: string;
-    firstAssistantText: string;
+    conversationText: string;
   }): Promise<string> {
     const state = getChattingProviderState(input.metadata);
     const sessionProvider = isProvider(state.upstreamProvider) ? state.upstreamProvider : this.settings.provider;
@@ -583,13 +582,11 @@ export default class ChatPlugin extends Plugin {
       [
         {
           role: "user",
-          content:
-            `First user message:\n${input.firstUserText}\n\n` +
-            `First assistant reply:\n${input.firstAssistantText}`,
+          content: `Conversation so far:\n${input.conversationText}`,
         },
       ],
       [],
-      "Generate a short, descriptive title (3-6 words, no quotes, no trailing punctuation) for this conversation. Respond with ONLY the title.",
+      "Generate a short, descriptive title (3-6 words, no quotes, no trailing punctuation) that captures the overall topic of this conversation, not just its opening line. Respond with ONLY the title.",
     );
 
     const text = response.content
@@ -614,23 +611,34 @@ export default class ChatPlugin extends Plugin {
   }
 
   /**
-   * New-conversation model resolution (SETTINGS_MIGRATION.md): prefer the
-   * durable `lastSelectedChatModel` seed if its provider is still enabled;
-   * otherwise fall back to the first enabled provider's default model;
-   * otherwise fall back to whatever legacy `settings.provider`/`model` hold
-   * (keeps a completely fresh install functional). This is a SEED only —
-   * once a session exists, its own `SessionMetadata.selectedModel` /
-   * `providerState.upstreamProvider` are authoritative and never re-resolve
-   * through here.
+   * New-conversation model resolution: PROVIDER prefers the durable
+   * `lastSelectedChatModel` seed (if its provider is still enabled) —
+   * remembering which provider you were last using is still useful and not
+   * what users are editing via the model catalog. Otherwise falls back to
+   * the first enabled provider, then legacy `settings.provider` (keeps a
+   * completely fresh install functional).
+   *
+   * The MODEL, however, always comes from `defaultModelFor(provider)` —
+   * i.e. that provider's Model catalog position 0 (Settings → "Manage
+   * models…", where the top entry is explicitly badged "Default") — NOT
+   * from `lastSelectedChatModel.model`. Those two used to compete (the seed
+   * almost always won in practice, since it exists after the very first
+   * message ever sent), which made the "Default" badge actively misleading:
+   * reordering the catalog had no visible effect on what a new chat
+   * actually started with. Catalog order now wins for the model, by
+   * explicit user decision, so dragging a model to the top is a real,
+   * reliable way to control new-chat defaults.
+   *
+   * This is a SEED only — once a session exists, its own
+   * `SessionMetadata.selectedModel` / `providerState.upstreamProvider` are
+   * authoritative and never re-resolve through here.
    */
   private resolveNewSessionModelSeed(): { provider: Provider; model: string } {
     const enabled = this.getEnabledProviders();
     const seed = readModelSelectionSeed(this.settings);
-    if (seed && enabled.includes(seed.providerId)) {
-      return { provider: seed.providerId, model: seed.model };
-    }
-    const fallbackProvider = enabled[0] ?? this.settings.provider;
-    return { provider: fallbackProvider, model: this.defaultModelFor(fallbackProvider) };
+    const provider =
+      seed && enabled.includes(seed.providerId) ? seed.providerId : (enabled[0] ?? this.settings.provider);
+    return { provider, model: this.defaultModelFor(provider) };
   }
 
   /** Providers with usable credentials right now: an API key (anthropic/openai) or a live ChatGPT OAuth connection. */
@@ -648,9 +656,15 @@ export default class ChatPlugin extends Plugin {
     return "ChatGPT OAuth";
   }
 
+  /**
+   * A provider's default model for a brand-new session: always Model
+   * catalog position 0 (`getModelOptions(provider)[0]`) — see
+   * `resolveNewSessionModelSeed()`'s doc comment above for why the old
+   * `settings.model`/`CHATGPT_OAUTH_DEFAULT_MODEL` special-cases were
+   * removed (they were competing, silently-winning "defaults" that made
+   * catalog reordering look like it did nothing).
+   */
   private defaultModelFor(provider: Provider): string {
-    if (provider === this.settings.provider && this.settings.model) return this.settings.model;
-    if (provider === "chatgpt-oauth") return CHATGPT_OAUTH_DEFAULT_MODEL;
     return getModelOptions(provider)[0]?.value ?? this.settings.model;
   }
 
