@@ -525,6 +525,26 @@ class ModelCatalogModal extends Modal {
       setIcon(gripEl, "grip-vertical");
       row.settingEl.prepend(gripEl);
 
+      // Manual override for the automatic (model-name-based) reasoning
+      // detection in src/model/capabilities.ts — needed because that
+      // heuristic is necessarily conservative about names it doesn't
+      // recognize yet (e.g. a future model family the codebase's regexes
+      // predate), which otherwise silently hides the reasoning effort
+      // selector for a perfectly real, reasoning-capable model.
+      row.addDropdown((dropdown) =>
+        dropdown
+          .addOption("auto", "Reasoning: Auto")
+          .addOption("on", "Reasoning: On")
+          .addOption("off", "Reasoning: Off")
+          .setValue(model.reasoningOverride ?? "auto")
+          .onChange(async (value) => {
+            const next = current.map((m, i) =>
+              i === index ? { ...m, reasoningOverride: value as "auto" | "on" | "off" } : m
+            );
+            await writeCustomCatalog(this.plugin, this.provider, next);
+          })
+      );
+
       row.addButton((btn) =>
         btn
           .setIcon("trash-2")
@@ -556,8 +576,12 @@ class ModelCatalogModal extends Modal {
     });
 
     // Add-a-custom-model-ID: appended to the end (not the default) unless
-    // moved up.
+    // moved up. Also lets you set the reasoning override up front (see the
+    // per-row dropdown above for the same control on existing entries) —
+    // useful for a brand-new model family the automatic name-based
+    // detection doesn't recognize yet.
     let customModelId = "";
+    let customModelReasoning: "auto" | "on" | "off" = "auto";
     new Setting(contentEl)
       .setName("Add custom model ID")
       .setDesc(`Adds a model to the bottom of ${this.provider}'s list above.`)
@@ -572,17 +596,26 @@ class ModelCatalogModal extends Modal {
           )
           .onChange((value) => { customModelId = value.trim(); })
       )
+      .addDropdown((dropdown) =>
+        dropdown
+          .addOption("auto", "Reasoning: Auto")
+          .addOption("on", "Reasoning: On")
+          .addOption("off", "Reasoning: Off")
+          .setValue("auto")
+          .onChange((value) => { customModelReasoning = value as "auto" | "on" | "off"; })
+      )
       .addButton((btn) =>
         btn.setButtonText("Add").onClick(async () => {
           if (!customModelId) return;
           if (!current.some((m) => m.value === customModelId)) {
             await writeCustomCatalog(this.plugin, this.provider, [
               ...current,
-              { value: customModelId, label: customModelId },
+              { value: customModelId, label: customModelId, reasoningOverride: customModelReasoning },
             ]);
           }
           new Notice(`Added ${customModelId}.`);
           customModelId = "";
+          customModelReasoning = "auto";
           this.render();
         })
       );

@@ -21,6 +21,7 @@ const checkFiles = [
   "model-catalog-persistence.check.ts",
   "title-generation.check.ts",
   "settings-round-trip.check.ts",
+  "model-capability-override.check.ts",
 ];
 
 let anyFailed = false;

@@ -1,4 +1,5 @@
 import type { Provider } from "../types";
+import { getModelOptions } from "../model-catalog";
 
 export type ReasoningEffort = "auto" | "low" | "medium" | "high" | "max";
 export type ProviderReasoningEffort = "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
@@ -22,13 +23,56 @@ const NONE: ModelCapabilities = {
 };
 
 /**
+ * Default reasoning-effort list used when a catalog entry's
+ * `reasoningOverride` forces reasoning ON for a model the name-based
+ * heuristic below wouldn't otherwise have recognized — e.g. a future model
+ * family ("gpt-6-astra") this codebase's regexes predate. Deliberately the
+ * richest list per provider (a plausible superset for a newer/flagship
+ * model); if the actual provider API rejects a value this doesn't support,
+ * that's a normal API error, not a UI bug.
+ */
+const OVERRIDE_ON_EFFORTS: Record<Provider, readonly ProviderReasoningEffort[]> = {
+  anthropic: ["low", "medium", "high"],
+  openai: ["none", "minimal", "low", "medium", "high", "xhigh", "max"],
+  "chatgpt-oauth": ["low", "medium", "high", "xhigh"],
+};
+
+/**
+ * Applies a catalog entry's manual `reasoningOverride` (Settings → "Manage
+ * models…") on top of the name-based heuristic result. `"auto"`/absent
+ * leaves the heuristic's answer untouched.
+ */
+function applyReasoningOverride(
+  provider: Provider,
+  modelId: string,
+  capabilities: ModelCapabilities,
+): ModelCapabilities {
+  const entry = getModelOptions(provider).find((m) => m.value === modelId);
+  const override = entry?.reasoningOverride;
+  if (!override || override === "auto") return capabilities;
+  if (override === "on") {
+    return { ...capabilities, reasoning: { supported: true, efforts: OVERRIDE_ON_EFFORTS[provider] } };
+  }
+  return { ...capabilities, reasoning: { supported: false, efforts: [] } };
+}
+
+/**
  * Conservative capability resolver.
- * Unknown models deliberately get fewer capabilities rather than optimistic ones.
+ * Unknown models deliberately get fewer capabilities rather than optimistic ones
+ * UNLESS a catalog entry explicitly overrides reasoning support (see
+ * `applyReasoningOverride()` above) — e.g. for a model name this codebase's
+ * heuristics don't recognize yet.
  * Keep all model-name heuristics here; provider adapters should consume this API.
  */
 export function getModelCapabilities(provider: Provider, modelId: string): ModelCapabilities {
+  const base = computeHeuristicCapabilities(provider, modelId);
+  if (!base) return NONE;
+  return applyReasoningOverride(provider, modelId, base);
+}
+
+function computeHeuristicCapabilities(provider: Provider, modelId: string): ModelCapabilities | null {
   const model = modelId.trim().toLowerCase();
-  if (!model) return NONE;
+  if (!model) return null;
 
   if (provider === "anthropic") {
     const isClaude = model.startsWith("claude-");
