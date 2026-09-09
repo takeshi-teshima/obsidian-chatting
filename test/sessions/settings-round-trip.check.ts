@@ -55,10 +55,13 @@ function main(): void {
     assert.deepEqual(after.customModelCatalog, before.customModelCatalog);
   });
 
-  check("sendOnEnter=true (a non-default value) survives a reload", () => {
-    const before: ChatSettings = { ...DEFAULT_SETTINGS, sendOnEnter: true };
+  check("sendOnEnterByDevice (a non-default value) survives a reload", () => {
+    const before: ChatSettings = {
+      ...DEFAULT_SETTINGS,
+      sendOnEnterByDevice: { desktop: false, phone: true, tablet: true },
+    };
     const after = simulateReload(toDiskJson(before));
-    assert.equal(after.sendOnEnter, true);
+    assert.deepEqual(after.sendOnEnterByDevice, { desktop: false, phone: true, tablet: true });
   });
 
   check("titleGenerationEnabled=false (a non-default value) survives a reload", () => {
@@ -95,13 +98,13 @@ function main(): void {
     let settings: ChatSettings = {
       ...DEFAULT_SETTINGS,
       customModelCatalog: { "chatgpt-oauth": [{ value: "gpt-5.5", label: "GPT-5.5" }] },
-      sendOnEnter: true,
+      sendOnEnterByDevice: { desktop: false, phone: true, tablet: true },
     };
     for (let i = 0; i < 5; i++) {
       settings = simulateReload(toDiskJson(settings));
     }
     assert.deepEqual(settings.customModelCatalog, { "chatgpt-oauth": [{ value: "gpt-5.5", label: "GPT-5.5" }] });
-    assert.equal(settings.sendOnEnter, true);
+    assert.deepEqual(settings.sendOnEnterByDevice, { desktop: false, phone: true, tablet: true });
   });
 
   // Sanity check that the defensive re-validation this function still does

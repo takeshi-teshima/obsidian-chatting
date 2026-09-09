@@ -38,11 +38,13 @@
     onModelChange: (providerId: string, model: string) => void;
     onReasoningChange: (effort: string) => void;
     /**
-     * `plugin.settings.sendOnEnter` (Settings → "Send on Enter"), mirroring
-     * how `provider`/`model` above are threaded in from plugin settings.
-     * `true`: plain Enter sends, Shift+Enter inserts a newline (the
-     * plugin's original hardcoded behavior). `false` (default): plain
-     * Enter inserts a newline and Cmd/Ctrl+Enter sends instead. See
+     * `resolveSendOnEnter(plugin.settings)` (src/device-send-on-enter.ts) —
+     * already resolved for THIS device's category (desktop/phone/tablet)
+     * from `ChatSettings.sendOnEnterByDevice` (Settings → "Send on Enter")
+     * before being threaded in here, the same way `provider`/`model` above
+     * are threaded in from plugin settings. `true`: plain Enter sends,
+     * Shift+Enter inserts a newline. `false`: plain Enter inserts a
+     * newline and Cmd/Ctrl+Enter sends instead. See
      * `handleGlobalKeydownCapture` below.
      */
     sendOnEnter: boolean;
