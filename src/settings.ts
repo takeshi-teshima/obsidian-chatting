@@ -5,6 +5,7 @@ import type { Provider, ChatSettings } from "./types";
 import { CHATGPT_OAUTH_DEFAULT_MODEL } from "./types";
 import type { ChatGPTDeviceAuthorization, PollHandle } from "./auth/chatgptOAuth";
 import { PromptProfileService } from "./profiles/service";
+import { currentDeviceCategory, type DeviceCategory } from "./device-send-on-enter";
 import {
   FALLBACK_MODELS,
   getModelDisplayName,
@@ -104,22 +105,8 @@ export class ChatSettingTab extends PluginSettingTab {
           })
       );
 
-    // ─── Send on Enter ──────────────────────────────────────────────────
-    new Setting(containerEl)
-      .setName("Send on Enter")
-      .setDesc(
-        "Off (default): Enter inserts a newline like a normal text box; use Cmd+Enter (macOS) " +
-          "or Ctrl+Enter (Windows/Linux) to send. On: Enter sends the message and Shift+Enter " +
-          "inserts a newline instead."
-      )
-      .addToggle((toggle) =>
-        toggle
-          .setValue(s.sendOnEnter)
-          .onChange(async (value) => {
-            s.sendOnEnter = value;
-            await this.plugin.saveSettings();
-          })
-      );
+    // ─── Send on Enter (per device category) ───────────────────────────
+    this.renderSendOnEnterSection(containerEl);
 
     // ─── Max iterations ───────────────────────────────────────────────
     new Setting(containerEl)
@@ -161,6 +148,51 @@ export class ChatSettingTab extends PluginSettingTab {
 
     // ─── Prompt profile ─────────────────────────────────────────────────
     this.renderPromptProfileSection(containerEl);
+  }
+
+  // ─── Send on Enter, per device category ────────────────────────────────
+
+  /**
+   * Three independent toggles (desktop/phone/tablet) rather than one global
+   * setting: the natural expectation genuinely differs by device, not just
+   * by user preference — physical keyboard + mouse makes plain-Enter-sends
+   * the common desktop convention, while phone/tablet on-screen keyboards
+   * make it easy to fat-finger a premature send. This settings screen is
+   * the SAME `data.json` on every device (it syncs), so all three toggles
+   * are editable from any one device — you don't need to be on an iPad to
+   * configure the iPad's behavior.
+   */
+  private renderSendOnEnterSection(containerEl: HTMLElement): void {
+    const s = this.plugin.settings;
+    const here = currentDeviceCategory();
+
+    new Setting(containerEl).setName("Send on Enter").setHeading();
+    containerEl.createEl("p", {
+      cls: "setting-item-description",
+      text:
+        "On: plain Enter sends the message (Shift+Enter inserts a newline). Off: plain Enter inserts " +
+        "a newline like a normal text box, and Cmd+Enter (macOS) / Ctrl+Enter (Windows/Linux) sends " +
+        "instead. Configured separately per device category — this same list applies to every device " +
+        "signed into this vault, not just the one you're looking at right now.",
+    });
+
+    const rows: Array<{ key: DeviceCategory; label: string }> = [
+      { key: "desktop", label: "Desktop" },
+      { key: "phone", label: "Phone" },
+      { key: "tablet", label: "Tablet" },
+    ];
+    for (const row of rows) {
+      new Setting(containerEl)
+        .setName(row.key === here ? `${row.label} (this device)` : row.label)
+        .addToggle((toggle) =>
+          toggle
+            .setValue(s.sendOnEnterByDevice[row.key])
+            .onChange(async (value) => {
+              s.sendOnEnterByDevice = { ...s.sendOnEnterByDevice, [row.key]: value };
+              await this.plugin.saveSettings();
+            })
+        );
+    }
   }
 
   // ─── Conversation titles (auto-generated, Claudian parity) ────────────

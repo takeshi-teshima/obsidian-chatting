@@ -12,6 +12,7 @@ import type { SessionRuntimeEvent, SessionRuntimeSnapshot } from "../sessions/ru
 import { SessionSwitcherModal } from "./session-switcher-modal";
 import { observePaneLayout } from "./responsive/pane-layout";
 import { getChattingProviderState } from "../sessions/metadata/types";
+import { resolveSendOnEnter } from "../device-send-on-enter";
 import { normalizeProvider, normalizeReasoningEffort, sameTurnExecution } from "../turn-execution/selection";
 import type { TurnExecutionConfig } from "../turn-execution/types";
 import { getModelCapabilities, type ReasoningEffort } from "../model/capabilities";
@@ -32,7 +33,7 @@ interface ChatContainerProps {
   /** Claudian-style composer selection (branch 14): always edits the NEXT send. */
   onModelChange: (providerId: string, model: string) => void;
   onReasoningChange: (effort: string) => void;
-  /** `plugin.settings.sendOnEnter` (Settings → "Send on Enter"); see ChatContainer.svelte's `handleKeydown`. */
+  /** `resolveSendOnEnter(plugin.settings)` — the per-device-category value for THIS device (Settings → "Send on Enter"); see ChatContainer.svelte's `handleKeydown`. */
   sendOnEnter: boolean;
 }
 
@@ -222,7 +223,7 @@ export class ObsidianChatView extends ItemView {
           onAttachFiles: (files: File[]) => this.handleAttachFiles(files),
           onModelChange: (providerId: string, model: string) => void this.handleModelChange(providerId, model),
           onReasoningChange: (effort: string) => void this.handleReasoningChange(effort),
-          sendOnEnter: this.plugin.settings.sendOnEnter,
+          sendOnEnter: resolveSendOnEnter(this.plugin.settings),
         },
       },
     );

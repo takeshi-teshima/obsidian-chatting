@@ -51,13 +51,24 @@ export interface ChatSettings {
    */
   customModelCatalog?: Partial<Record<Provider, ModelCatalogEntry[]>>;
   /**
-   * Composer keybinding: when `true`, plain Enter sends the message (and
-   * Shift+Enter inserts a newline) — this is the plugin's original
-   * hardcoded behavior. When `false` (the default), plain Enter inserts a
-   * newline like a normal textarea, and Cmd/Ctrl+Enter sends instead. See
-   * `handleKeydown` in src/ui/ChatContainer.svelte.
+   * Composer keybinding, resolved PER DEVICE CATEGORY (not one global
+   * setting) since the natural expectation differs: physical keyboard +
+   * mouse on desktop makes plain-Enter-sends the common convention, while
+   * phone/tablet on-screen keyboards make it easy to fat-finger a
+   * premature send, so newline-by-default (with a mod+Enter/send-button
+   * fallback) matches most mobile chat apps. `true` for a category: plain
+   * Enter sends (Shift+Enter inserts a newline) on that device category.
+   * `false` (default for phone/tablet): plain Enter inserts a newline,
+   * Cmd/Ctrl+Enter sends instead. Resolved for the CURRENT device via
+   * `resolveSendOnEnter()` (src/device-send-on-enter.ts) using Obsidian's
+   * `Platform.isTablet`/`Platform.isMobile`; see `handleKeydown` in
+   * src/ui/ChatContainer.svelte for where the resolved value is consumed.
    */
-  sendOnEnter: boolean;
+  sendOnEnterByDevice: {
+    desktop: boolean;
+    phone: boolean;
+    tablet: boolean;
+  };
   /**
    * Auto-generate a conversation title from an LLM after the first exchange
    * completes (Claudian parity). Default true. See
@@ -101,7 +112,7 @@ export const DEFAULT_SETTINGS: ChatSettings = {
   reasoningEffort: "auto",
   customInstructions: "",
   activeProfileId: null,
-  sendOnEnter: false,
+  sendOnEnterByDevice: { desktop: true, phone: false, tablet: false },
   titleGenerationEnabled: true,
 };
 
