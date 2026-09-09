@@ -58,6 +58,21 @@ export interface ChatSettings {
    * `handleKeydown` in src/ui/ChatContainer.svelte.
    */
   sendOnEnter: boolean;
+  /**
+   * Auto-generate a conversation title from an LLM after the first exchange
+   * completes (Claudian parity). Default true. See
+   * `SessionManagerOptions.generateTitle` (src/sessions/runtime/manager.ts)
+   * for the trigger logic and `SessionManager.regenerateTitle` for the
+   * explicit re-run path (command + session-switcher-modal menu item).
+   */
+  titleGenerationEnabled: boolean;
+  /**
+   * Dedicated provider+model used to generate conversation titles. Absent
+   * (the default) means "same as the conversation's own provider/model" —
+   * no extra credentials required out of the box. Set from Settings →
+   * "Conversation titles".
+   */
+  titleGeneration?: { provider: Provider; model: string };
 }
 
 /** A single model catalog entry: id + display label. Kept minimal and JSON-safe for persistence. */
@@ -76,6 +91,7 @@ export const DEFAULT_SETTINGS: ChatSettings = {
   customInstructions: "",
   activeProfileId: null,
   sendOnEnter: false,
+  titleGenerationEnabled: true,
 };
 
 /**

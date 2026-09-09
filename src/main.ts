@@ -127,6 +127,12 @@ export default class ChatPlugin extends Plugin {
           new Notice("Conversation updated from disk.");
         }
       },
+      // Live gate (read fresh, not captured): toggling "Auto-generate
+      // titles" in Settings takes effect on the very next turn, no reload
+      // needed. See SessionManager.run()'s admission-time eligibility
+      // snapshot for why this must stay a live getter, not a boolean.
+      isTitleGenerationEnabled: () => this.settings.titleGenerationEnabled,
+      generateTitle: (input) => this.generateSessionTitle(input),
     });
 
     // Runs v3/branch-11/legacy migration into `.chatting/` canonical storage
@@ -193,6 +199,12 @@ export default class ChatPlugin extends Plugin {
       id: "rename-conversation",
       name: "Rename conversation",
       callback: () => void this.renameActiveConversation(),
+    });
+
+    this.addCommand({
+      id: "regenerate-conversation-title",
+      name: "Regenerate conversation title",
+      callback: () => void this.regenerateActiveConversationTitle(),
     });
 
     this.addCommand({
@@ -532,6 +544,62 @@ export default class ChatPlugin extends Plugin {
     };
   }
 
+  /**
+   * Injected into `SessionManager` as `generateTitle` (see its doc comment
+   * in src/sessions/runtime/manager.ts for the DI rationale). Uses the same
+   * `sendMessage()` helper the Settings "Test" button already calls
+   * (src/api/client.ts), with `tools: []` since this is a one-shot text
+   * completion, not an agent turn.
+   *
+   * Provider/model resolution: `settings.titleGeneration` (Settings →
+   * "Conversation titles") if the user configured a dedicated cheap/fast
+   * model, otherwise the session's own current provider+model — so title
+   * generation never requires extra credentials out of the box.
+   */
+  private async generateSessionTitle(input: {
+    sessionId: string;
+    metadata: SessionMetadata;
+    firstUserText: string;
+    firstAssistantText: string;
+  }): Promise<string> {
+    const state = getChattingProviderState(input.metadata);
+    const sessionProvider = isProvider(state.upstreamProvider) ? state.upstreamProvider : this.settings.provider;
+    const sessionModel = input.metadata.selectedModel || this.settings.model;
+    const override = this.settings.titleGeneration;
+    const provider = override?.provider ?? sessionProvider;
+    const model = override?.model ?? sessionModel;
+
+    const titleSettings: ChatSettings = {
+      ...this.settings,
+      provider,
+      model,
+      apiKey: this.loadApiKey(provider),
+    };
+
+    const { sendMessage } = await import("./api/client");
+    const response = await sendMessage(
+      titleSettings,
+      [
+        {
+          role: "user",
+          content:
+            `First user message:\n${input.firstUserText}\n\n` +
+            `First assistant reply:\n${input.firstAssistantText}`,
+        },
+      ],
+      [],
+      "Generate a short, descriptive title (3-6 words, no quotes, no trailing punctuation) for this conversation. Respond with ONLY the title.",
+    );
+
+    const text = response.content
+      .filter((block) => block.type === "text")
+      .map((block) => block.text ?? "")
+      .join("")
+      .trim();
+    if (!text) throw new Error("Title generation returned an empty response.");
+    return text;
+  }
+
   private defaultSessionSeed(): CreateSessionInput {
     const { provider, model } = this.resolveNewSessionModelSeed();
     return {
@@ -638,6 +706,18 @@ export default class ChatPlugin extends Plugin {
     if (!id) { new Notice("No active conversation."); return; }
     const title = window.prompt("New conversation title:");
     if (title && title.trim()) await this.sessionManager.rename(id, title.trim());
+  }
+
+  private async regenerateActiveConversationTitle(): Promise<void> {
+    const view = this.getChatView();
+    const id = view?.boundSession();
+    if (!id) { new Notice("No active conversation."); return; }
+    try {
+      new Notice("Regenerating conversation title…");
+      await this.sessionManager.regenerateTitle(id);
+    } catch (error) {
+      new Notice(error instanceof Error ? error.message : String(error));
+    }
   }
 
   private async togglePinActiveConversation(): Promise<void> {

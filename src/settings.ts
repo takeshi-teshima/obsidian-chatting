@@ -155,8 +155,82 @@ export class ChatSettingTab extends PluginSettingTab {
         textarea.inputEl.addClass("chatting-with-ai-custom-instructions");
       });
 
+    // ─── Conversation titles ─────────────────────────────────────────────
+    this.renderTitleGenerationSection(containerEl);
+
     // ─── Prompt profile ─────────────────────────────────────────────────
     this.renderPromptProfileSection(containerEl);
+  }
+
+  // ─── Conversation titles (auto-generated, Claudian parity) ────────────
+
+  private renderTitleGenerationSection(containerEl: HTMLElement): void {
+    const s = this.plugin.settings;
+
+    new Setting(containerEl).setName("Conversation titles").setHeading();
+
+    new Setting(containerEl)
+      .setName("Auto-generate titles")
+      .setDesc(
+        "Generate a short title from an LLM after the first exchange in a conversation. " +
+          "Can be regenerated later via \"Regenerate conversation title\" (command palette or the conversation list's ⋯ menu)."
+      )
+      .addToggle((toggle) =>
+        toggle
+          .setValue(s.titleGenerationEnabled)
+          .onChange(async (value) => {
+            s.titleGenerationEnabled = value;
+            await this.plugin.saveSettings();
+          })
+      );
+
+    // Provider picker: "Same as conversation" (titleGeneration left
+    // undefined) or an explicit provider, in which case a second dropdown
+    // lets the user pick a model from that provider's catalog (reusing
+    // getModelOptions() — no separate catalog logic).
+    const SAME_AS_CONVERSATION = "__same_as_conversation__";
+    const selectedProvider = s.titleGeneration?.provider ?? SAME_AS_CONVERSATION;
+
+    const providerSetting = new Setting(containerEl)
+      .setName("Title-generation model")
+      .setDesc(
+        "Which provider+model generates titles. \"Same as conversation\" (default) reuses whatever " +
+          "the conversation itself is using — no extra credentials required."
+      )
+      .addDropdown((dropdown) => {
+        dropdown.addOption(SAME_AS_CONVERSATION, "Same as conversation");
+        dropdown.addOption("anthropic", "Anthropic");
+        dropdown.addOption("openai", "OpenAI");
+        dropdown.addOption("chatgpt-oauth", "ChatGPT OAuth");
+        dropdown.setValue(selectedProvider);
+        dropdown.onChange(async (value) => {
+          if (value === SAME_AS_CONVERSATION) {
+            s.titleGeneration = undefined;
+          } else {
+            const provider = value as Provider;
+            const existingModel = s.titleGeneration?.provider === provider ? s.titleGeneration.model : undefined;
+            s.titleGeneration = { provider, model: existingModel ?? getModelOptions(provider)[0]?.value ?? "" };
+          }
+          await this.plugin.saveSettings();
+          this.display();
+        });
+      });
+
+    if (selectedProvider !== SAME_AS_CONVERSATION) {
+      const provider = selectedProvider as Provider;
+      const models = getModelOptions(provider);
+      providerSetting.addDropdown((dropdown) => {
+        for (const model of models) dropdown.addOption(model.value, model.label);
+        const current = s.titleGeneration?.model && models.some((m) => m.value === s.titleGeneration!.model)
+          ? s.titleGeneration.model
+          : models[0]?.value ?? "";
+        dropdown.setValue(current);
+        dropdown.onChange(async (value) => {
+          s.titleGeneration = { provider, model: value };
+          await this.plugin.saveSettings();
+        });
+      });
+    }
   }
 
   // ─── Prompt profiles (AI/Prompts/**/*.md) ──────────────────────────────
