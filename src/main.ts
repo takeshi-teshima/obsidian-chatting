@@ -492,6 +492,12 @@ export default class ChatPlugin extends Plugin {
       );
       console.warn("[chatting-with-ai] quarantined session-index sync-conflict files", indexInit.quarantinedIndexPaths);
     }
+    if (indexInit.indexRebuildRefused) {
+      new Notice(
+        "Couldn't refresh the conversation index after a sync-conflict cleanup (no conversations were lost — " +
+          "this only affects the list view). See the developer console for details."
+      );
+    }
 
     // If no session exists at all yet (fresh vault, migration produced
     // nothing), seed exactly one blank session so the first view has

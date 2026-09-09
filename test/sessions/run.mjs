@@ -23,6 +23,7 @@ const checkFiles = [
   "settings-round-trip.check.ts",
   "model-capability-override.check.ts",
   "session-index-quarantine.check.ts",
+  "session-index-rebuild-guard.check.ts",
 ];
 
 let anyFailed = false;

@@ -40,6 +40,16 @@ export interface SessionIndexInitializeResult {
    * sync-provider's conflict-naming convention. Empty on a normal startup.
    */
   quarantinedPaths: string[];
+  /**
+   * True when a rebuild was needed but got refused because `rebuildSource()`
+   * came back empty (even after retries) while a previous non-empty index
+   * existed -- see the safety guard in `initialize()`. The previous index
+   * is left in place untouched; this only ever means "the index may now be
+   * stale/still contain quarantined-conflict-tainted entries" (harmless --
+   * quarantining never removes canonical files), never "sessions were
+   * lost". Surfaced so the caller can warn the user rather than stay silent.
+   */
+  rebuildRefused: boolean;
 }
 
 /**
@@ -96,11 +106,46 @@ export class SessionIndexStore {
     this.manifest = await this.readJson(this.manifestPath, isManifest);
     this.hot = await this.readJson(this.hotPath, isShard);
     let rebuilt = false;
+    let rebuildRefused = false;
     if (!this.manifest || !this.hot || quarantinedPaths.length > 0) {
-      await this.rebuild(await rebuildSource());
-      rebuilt = true;
+      // Observed in production immediately after shipping the quarantine
+      // logic above: a rebuild triggered right after plugin reload
+      // occasionally saw `rebuildSource()` (session-metadata's file
+      // listing) come back completely empty, even though 16 real sessions'
+      // metadata files were sitting right there on disk and a retry a
+      // moment later found all of them correctly -- almost certainly a
+      // transient race in the underlying vault adapter's directory listing
+      // right after startup, not a real "zero sessions" state. Blindly
+      // committing that empty result replaced a real 16-session index with
+      // an effectively-empty one (main.ts's "no sessions at all" fallback
+      // then created a throwaway blank session, masking the problem rather
+      // than surfacing it). Guard against this two ways: (1) retry a few
+      // times before trusting an empty result at all, (2) if a PREVIOUS
+      // manifest is known to have had real sessions, never commit an empty
+      // rebuild over it even after retries -- keep serving the previous
+      // (still content-valid; only quarantining removed anything, and that
+      // only touched extra foreign files, never the canonical ones already
+      // loaded into `this.manifest`/`this.hot` above) index instead, and
+      // report the failure loudly so it can be investigated.
+      const previouslyHadSessions = ((this.manifest?.activeCount ?? 0) + (this.manifest?.archivedCount ?? 0)) > 0;
+      let items = await rebuildSource();
+      for (let attempt = 0; attempt < 3 && items.length === 0; attempt++) {
+        await sleep(300);
+        items = await rebuildSource();
+      }
+      if (items.length === 0 && previouslyHadSessions) {
+        rebuildRefused = true;
+        console.error(
+          "[chatting-with-ai] session-index rebuild source came back empty (after retries) despite a " +
+            "non-empty previous index -- refusing to overwrite. Session metadata on disk was NOT touched; " +
+            "this only affects the navigation index. Investigate session-metadata directory listing reliability."
+        );
+      } else {
+        await this.rebuild(items);
+        rebuilt = true;
+      }
     }
-    return { rebuilt, stats: await this.getStats(), quarantinedPaths };
+    return { rebuilt, stats: await this.getStats(), quarantinedPaths, rebuildRefused };
   }
 
   /**
@@ -455,6 +500,7 @@ function finite(value: unknown): value is number { return typeof value === "numb
 function clamp(value: number, min: number, max: number): number { return Math.max(min, Math.min(max, value)); }
 /** No Node `path` module (mobile-safe) -- vault paths are always "/"-separated. */
 function basename(path: string): string { return path.split("/").pop() ?? path; }
+function sleep(ms: number): Promise<void> { return new Promise((resolve) => setTimeout(resolve, ms)); }
 /** Each base filename this store writes, plus its `.tmp`/`.bak` write-ahead variants (see writeJson()/readJson()) -- all normal, none are conflicts. */
 function expectedIndexFilenames(bases: readonly string[]): Set<string> {
   const names = new Set<string>();
