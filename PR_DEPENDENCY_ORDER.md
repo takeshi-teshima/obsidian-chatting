@@ -53,9 +53,11 @@ sense relative to its specific base.
 | 29 | [#29](https://github.com/takeshi-teshima/obsidian-chatting/pull/29) | `fix/default-model-newbtn-title-digest` ← `feat/model-capability-manual-override` | Add manual reasoning-effort override for models the name-based heuristic doesn't recognize |
 | 30 | [#30](https://github.com/takeshi-teshima/obsidian-chatting/pull/30) | `feat/model-capability-manual-override` ← `feat/session-index-conflict-quarantine` | Quarantine and rebuild the session index when sync-conflict files appear |
 | 31 | [#31](https://github.com/takeshi-teshima/obsidian-chatting/pull/31) | `feat/session-index-conflict-quarantine` ← `fix/session-index-rebuild-guard` | Never let a transient empty rebuild source wipe a known-non-empty session index |
+| 32 | [#32](https://github.com/takeshi-teshima/obsidian-chatting/pull/32) | `fix/session-index-rebuild-guard` ← `fix/image-staleness-and-user-msg-selection` | Fix image attach false-positive staleness on desktop; make user message bubbles selectable |
 
-`fix/session-index-rebuild-guard` (PR #31's head) is `personal/main`'s
-current tip. Merging #1 through #31 in order is equivalent to fast-forwarding
+`fix/image-staleness-and-user-msg-selection` (PR #32's head) is
+`personal/main`'s current tip. Merging #1 through #32 in order is
+equivalent to fast-forwarding
 `main` to `personal/main` in one shot.
 
 ## Standalone (not part of the chain above)
