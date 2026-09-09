@@ -29,6 +29,17 @@ interface SessionIndexShard {
 export interface SessionIndexInitializeResult {
   rebuilt: boolean;
   stats: SessionStoreStats;
+  /**
+   * Vault-relative paths of files found inside this store's own reserved
+   * directories (`session-index/`, `session-index/shards/`) that were NOT
+   * one of the exact filenames this store itself ever writes, and were
+   * therefore moved out to `.chatting/sync-conflicts/...` before this
+   * initialize() call rebuilt the index from scratch. See
+   * `quarantineForeignFiles()`'s doc comment for why this is detected by
+   * directory reservation rather than by matching any specific
+   * sync-provider's conflict-naming convention. Empty on a normal startup.
+   */
+  quarantinedPaths: string[];
 }
 
 /**
@@ -71,14 +82,81 @@ export class SessionIndexStore {
   async initialize(rebuildSource: () => Promise<ConversationMeta[]>): Promise<SessionIndexInitializeResult> {
     await this.adapter.ensureFolder(this.root);
     await this.adapter.ensureFolder(this.shardsRoot);
+    // Real report: two devices (mobile + PC) syncing the same vault via
+    // iCloud each wrote to manifest.json/hot.json/a shard independently,
+    // and iCloud -- which has no way to merge two divergent JSON files --
+    // kept one under the canonical name and renamed the other to an
+    // alternate filename the app never reads back, silently discarding
+    // whichever device's index update lost that race. Since this whole
+    // directory is fully re-derivable from session-metadata (the actual
+    // source of truth, see `rebuildIndexSource()`), the fix is to detect
+    // ANY unexpected file here and force a full rebuild rather than trust
+    // whatever happens to be sitting under the canonical names.
+    const quarantinedPaths = await this.quarantineForeignFiles();
     this.manifest = await this.readJson(this.manifestPath, isManifest);
     this.hot = await this.readJson(this.hotPath, isShard);
     let rebuilt = false;
-    if (!this.manifest || !this.hot) {
+    if (!this.manifest || !this.hot || quarantinedPaths.length > 0) {
       await this.rebuild(await rebuildSource());
       rebuilt = true;
     }
-    return { rebuilt, stats: await this.getStats() };
+    return { rebuilt, stats: await this.getStats(), quarantinedPaths };
+  }
+
+  /**
+   * `session-index/` (and its `shards/` subfolder) is reserved exclusively
+   * for this store's own files: `manifest.json`, `hot.json`, each
+   * `<shard>.json`, and their `.tmp`/`.bak` write-ahead variants (see
+   * `writeJson()`/`readJson()` below -- those are normal, expected, NOT
+   * conflicts). Deliberately does NOT pattern-match any specific
+   * sync-provider's conflict-copy naming convention (e.g. iCloud's
+   * "NAME 2.json") -- that's provider-specific and not this code's concern.
+   * Instead: this store knows the exact, complete set of filenames it ever
+   * writes here, so anything else found in these two directories can only
+   * be an artifact of something outside this store's control (most likely
+   * a sync conflict copy), full stop, regardless of what it happens to be
+   * named. Quarantined files are MOVED (never deleted) to
+   * `.chatting/sync-conflicts/session-index/...`, preserving the relative
+   * subpath, so nothing is silently destroyed and a user/developer can
+   * inspect what was found.
+   */
+  private async quarantineForeignFiles(): Promise<string[]> {
+    const quarantined: string[] = [];
+    const expectedRoot = expectedIndexFilenames(["manifest.json", "hot.json"]);
+    const rootFiles = await this.adapter.listFiles(this.root);
+    for (const path of rootFiles) {
+      if (path === this.shardsRoot) continue; // listFiles should only return files, but be defensive
+      if (expectedRoot.has(basename(path))) continue;
+      await this.quarantineFile(path, "session-index");
+      quarantined.push(path);
+    }
+
+    const shardBases: string[] = [];
+    for (let i = 0; i < SESSION_INDEX_SHARDS; i++) shardBases.push(`${i.toString(16).padStart(2, "0")}.json`);
+    const expectedShards = expectedIndexFilenames(shardBases);
+    const shardFiles = await this.adapter.listFiles(this.shardsRoot);
+    for (const path of shardFiles) {
+      if (expectedShards.has(basename(path))) continue;
+      await this.quarantineFile(path, "session-index/shards");
+      quarantined.push(path);
+    }
+
+    return quarantined;
+  }
+
+  /** `this.root` is ".chatting/session-index" -- quarantine goes to a sibling ".chatting/sync-conflicts/<subdir>", never inside a directory this store itself scans. */
+  private async quarantineFile(path: string, subdir: string): Promise<void> {
+    const base = this.root.split("/").slice(0, -1).join("/") || ".";
+    const quarantineDir = `${base}/sync-conflicts/${subdir}`;
+    await this.adapter.ensureFolder(quarantineDir);
+    const name = basename(path);
+    let target = `${quarantineDir}/${name}`;
+    let n = 1;
+    while (await this.adapter.exists(target)) {
+      target = `${quarantineDir}/${Date.now()}_${n}_${name}`;
+      n++;
+    }
+    await this.adapter.rename(path, target);
   }
 
   async getStats(): Promise<SessionStoreStats> {
@@ -375,3 +453,15 @@ function isConversationMeta(value: unknown): value is ConversationMeta {
 function isRecord(value: unknown): value is Record<string, unknown> { return !!value && typeof value === "object" && !Array.isArray(value); }
 function finite(value: unknown): value is number { return typeof value === "number" && Number.isFinite(value) && value >= 0; }
 function clamp(value: number, min: number, max: number): number { return Math.max(min, Math.min(max, value)); }
+/** No Node `path` module (mobile-safe) -- vault paths are always "/"-separated. */
+function basename(path: string): string { return path.split("/").pop() ?? path; }
+/** Each base filename this store writes, plus its `.tmp`/`.bak` write-ahead variants (see writeJson()/readJson()) -- all normal, none are conflicts. */
+function expectedIndexFilenames(bases: readonly string[]): Set<string> {
+  const names = new Set<string>();
+  for (const base of bases) {
+    names.add(base);
+    names.add(`${base}.tmp`);
+    names.add(`${base}.bak`);
+  }
+  return names;
+}

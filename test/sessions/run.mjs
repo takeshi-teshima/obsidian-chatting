@@ -22,6 +22,7 @@ const checkFiles = [
   "title-generation.check.ts",
   "settings-round-trip.check.ts",
   "model-capability-override.check.ts",
+  "session-index-quarantine.check.ts",
 ];
 
 let anyFailed = false;
