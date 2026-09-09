@@ -42,7 +42,17 @@ export class ContextRefService {
     if (!(file instanceof TFile)) return { exists: false, stale: true };
     const current = this.fromFile(file, ref.kind);
     if (!current) return { exists: true, stale: true };
-    return { exists: true, stale: current.size !== ref.size || current.mtime !== ref.mtime, current };
+    // Deliberately size-only, NOT mtime. Reported bug: on desktop, a file's
+    // mtime can be touched (re-synced, extended attributes rewritten, etc.
+    // by iCloud/Dropbox/similar) between "select this image" and "send"
+    // without the actual bytes changing at all, which made every desktop
+    // image attachment fail with "changed since it was selected" even
+    // though nothing really changed. A mobile camera photo, freshly taken
+    // and sent immediately, rarely hits this window, which is why the bug
+    // was desktop-only in practice. Byte size is a much more stable signal
+    // of "is this actually a different file" without needing to read and
+    // hash the full file contents on every send.
+    return { exists: true, stale: current.size !== ref.size, current };
   }
 }
 

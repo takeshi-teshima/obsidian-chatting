@@ -749,11 +749,31 @@
     user-select: text;
   }
 
+  /* Explicit on the actual text-containing element too (not just the
+     padded bubble wrapper above) — `user-select` is inherited by default
+     so this is technically redundant, but reported as not copyable on
+     desktop, so make it explicit and unambiguous here rather than relying
+     on inheritance through an intermediate element. */
+  .ochatting-msg-content {
+    -webkit-user-select: text;
+    user-select: text;
+    cursor: text;
+  }
+
   .ochatting-user-msg {
     align-self: flex-end;
     background: var(--interactive-accent);
     color: var(--text-on-accent);
     border-bottom-right-radius: var(--radius-s);
+  }
+
+  /* Default ::selection contrast can be nearly invisible on top of an
+     already-accent-colored bubble (accent-on-accent), which likely reads
+     as "I can't select this text" even when selection technically works.
+     Force a visible, legible highlight here specifically. */
+  .ochatting-user-msg ::selection {
+    background: var(--text-on-accent);
+    color: var(--interactive-accent);
   }
 
   .ochatting-assistant-msg {
