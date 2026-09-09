@@ -210,3 +210,29 @@
   margin-left: 0.5em;
   vertical-align: middle;
 }
+
+/* ModelCatalogModal: drag-to-reorder handle. touch-action:none so a
+   press-and-drag on this specific icon isn't fought by the browser trying
+   to scroll the modal at the same time — normal scrolling elsewhere in the
+   modal (i.e. not starting on the handle) is unaffected. */
+.ochatting-model-catalog-grip {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.5em;
+  height: 1.5em;
+  margin-right: 0.5em;
+  color: var(--text-faint);
+  cursor: grab;
+  touch-action: none;
+  flex-shrink: 0;
+}
+
+.ochatting-model-catalog-grip:active {
+  cursor: grabbing;
+}
+
+.ochatting-model-catalog-row-dragging {
+  opacity: 0.6;
+  background: var(--background-modifier-hover);
+}
