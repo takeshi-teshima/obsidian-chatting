@@ -79,6 +79,17 @@ export interface ChatSettings {
 export interface ModelCatalogEntry {
   value: string;
   label: string;
+  /**
+   * Manual override for `src/model/capabilities.ts`'s automatic (regex/
+   * model-name-based) reasoning-effort detection. That heuristic is
+   * necessarily conservative about model names it doesn't recognize yet
+   * (e.g. a hypothetical "gpt-6-astra" the codebase's patterns predate) —
+   * absent/`"auto"` (the default) keeps deferring to it, `"on"`/`"off"`
+   * force the reasoning effort selector to show/hide regardless of what
+   * the name-based heuristic would have guessed. Set from Settings →
+   * "Manage models…" when adding or editing a catalog entry.
+   */
+  reasoningOverride?: "auto" | "on" | "off";
 }
 
 export const DEFAULT_SETTINGS: ChatSettings = {
