@@ -59,8 +59,14 @@ export interface SessionManagerOptions {
   generateTitle?: (input: {
     sessionId: string;
     metadata: SessionMetadata;
-    firstUserText: string;
-    firstAssistantText: string;
+    /**
+     * A text-only digest of the WHOLE conversation so far (see
+     * `buildConversationDigest()` below) — not just the first exchange.
+     * `regenerateTitle()` can be called well into a long conversation, at
+     * which point a title based only on message #1 would ignore
+     * everything the conversation has since turned into.
+     */
+    conversationText: string;
   }) => Promise<string>;
   /**
    * Live gate for the AUTOMATIC (post-first-turn) title generation trigger
@@ -558,15 +564,14 @@ export class SessionManager {
     const workspace = await this.store.load(sessionId);
     if (!workspace) return;
 
-    const { firstUserText, firstAssistantText } = extractFirstExchange(workspace.messages);
+    const conversationText = buildConversationDigest(workspace.messages);
     await this.patchMetadata(sessionId, (metadata) => ({ ...metadata, titleGenerationStatus: "pending" }));
 
     try {
       const raw = await this.generateTitle({
         sessionId,
         metadata: workspace.metadata,
-        firstUserText,
-        firstAssistantText,
+        conversationText,
       });
       const title = sanitizeGeneratedTitle(raw);
       if (!title) throw new Error("Title generation returned an empty response.");
@@ -653,18 +658,44 @@ function isTitleGenerationEligible(metadata: SessionMetadata): boolean {
   );
 }
 
-const TITLE_GENERATION_TEXT_LIMIT = 500;
 const GENERATED_TITLE_MAX_LENGTH = 60;
+// Overall cap on the digest handed to the title-generation LLM call. Kept
+// modest since this is a cheap one-shot call, not the actual agent turn.
+const DIGEST_TOTAL_LIMIT = 6000;
+// When the digest would exceed the cap, keep this many chars from the START
+// (topic-setting) and fill the rest of the budget from the END (where the
+// conversation has most recently moved to) rather than just truncating the
+// tail — a title generated well into a long conversation should reflect
+// both where it started and where it's ended up, not just message #1.
+const DIGEST_HEAD_SHARE = 0.4;
 
-function extractFirstExchange(
-  messages: readonly UnifiedMessage[],
-): { firstUserText: string; firstAssistantText: string } {
-  const firstUser = messages.find((message) => message.role === "user");
-  const firstAssistant = messages.find((message) => message.role === "assistant");
-  return {
-    firstUserText: truncateForTitlePrompt(textOfMessage(firstUser)),
-    firstAssistantText: truncateForTitlePrompt(textOfMessage(firstAssistant)),
-  };
+/**
+ * Text-only digest of the ENTIRE conversation so far (user + assistant
+ * turns only — tool calls/results are omitted, they're not useful title
+ * material and can be large). Replaces an earlier version that only ever
+ * looked at the very first user/assistant message: fine for the automatic
+ * post-first-turn trigger (nothing else exists yet at that point anyway),
+ * but wrong for `regenerateTitle()`, which can be invoked well into a long
+ * conversation and was still silently generating a title from message #1
+ * alone, ignoring everything since.
+ */
+function buildConversationDigest(messages: readonly UnifiedMessage[]): string {
+  const lines: string[] = [];
+  for (const message of messages) {
+    if (message.role !== "user" && message.role !== "assistant") continue;
+    const text = textOfMessage(message).replace(/\s+/g, " ").trim();
+    if (!text) continue;
+    lines.push(`${message.role === "user" ? "User" : "Assistant"}: ${text}`);
+  }
+
+  const full = lines.join("\n");
+  if (full.length <= DIGEST_TOTAL_LIMIT) return full;
+
+  const headLen = Math.floor(DIGEST_TOTAL_LIMIT * DIGEST_HEAD_SHARE);
+  const tailLen = DIGEST_TOTAL_LIMIT - headLen;
+  const head = full.slice(0, headLen).trimEnd();
+  const tail = full.slice(full.length - tailLen).trimStart();
+  return `${head}\n... (conversation continues) ...\n${tail}`;
 }
 
 function textOfMessage(message: UnifiedMessage | undefined): string {
@@ -676,13 +707,6 @@ function textOfMessage(message: UnifiedMessage | undefined): string {
     .map((block) => (block.type === "text" ? block.text ?? "" : ""))
     .filter(Boolean)
     .join("\n");
-}
-
-function truncateForTitlePrompt(text: string): string {
-  const trimmed = text.replace(/\s+/g, " ").trim();
-  return trimmed.length <= TITLE_GENERATION_TEXT_LIMIT
-    ? trimmed
-    : trimmed.slice(0, TITLE_GENERATION_TEXT_LIMIT).trimEnd();
 }
 
 /** Trims whitespace, strips surrounding quote characters, and caps length. */

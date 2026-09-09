@@ -90,6 +90,11 @@
   cursor: pointer;
 }
 
+.ochatting-session-bar-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
 .ochatting-chat-mount {
   flex: 1 1 auto;
   min-height: 0;

@@ -97,8 +97,7 @@ async function mkStore(): Promise<SessionWorkspaceStore> {
 interface GenerateTitleCall {
   sessionId: string;
   metadata: SessionMetadata;
-  firstUserText: string;
-  firstAssistantText: string;
+  conversationText: string;
 }
 
 async function main(): Promise<void> {
@@ -150,8 +149,8 @@ async function main(): Promise<void> {
 
       assert.equal(calls.length, 1, "generateTitle must be called exactly once");
       assert.equal(calls[0]!.sessionId, id);
-      assert.equal(calls[0]!.firstUserText, "hello there");
-      assert.equal(calls[0]!.firstAssistantText, "echo: hello there");
+      assert.match(calls[0]!.conversationText, /User: hello there/);
+      assert.match(calls[0]!.conversationText, /Assistant: echo: hello there/);
 
       const meta = await store.getMeta(id);
       assert.equal(meta?.titleGenerationStatus, "success");
@@ -238,6 +237,48 @@ async function main(): Promise<void> {
     await manager.shutdown();
   }
 
+  console.log("\n== regression: regenerateTitle() reflects the WHOLE conversation, not just the first exchange ==");
+  {
+    // A real user report: regenerating a title well into a long conversation
+    // still only produced a title based on message #1, because the digest
+    // builder used to hard-search for the FIRST user/assistant message
+    // specifically, no matter how many turns had happened since.
+    const store = await mkStore();
+    let lastConversationText = "";
+    const manager = new SessionManager({
+      store,
+      agentFactory: { create: () => new FakeAgentAdapter() },
+      getDefaultSessionSeed: () => ({ title: "New chat" }),
+      getTurnSelectionFallback: () => ({ provider: "anthropic", model: "claude-sonnet-4-6" }),
+      generateTitle: async ({ conversationText }) => {
+        lastConversationText = conversationText;
+        return "A Title";
+      },
+    });
+
+    const session = await manager.createSession();
+    const id = session.metadata.id;
+
+    await manager.run(id, { text: "let's talk about sourdough bread" });
+    await waitUntil(async () => (await store.getMeta(id))?.titleGenerationStatus === "success");
+    await manager.run(id, { text: "actually, let's switch to talking about pasta instead" });
+    await sleep(20); // second turn must NOT re-trigger automatic generation; give it a moment to (not) happen
+
+    await check("regenerateTitle()'s digest includes topics from turns AFTER the first one", async () => {
+      lastConversationText = "";
+      await manager.regenerateTitle(id);
+      await waitUntil(() => lastConversationText !== "");
+      assert.match(lastConversationText, /sourdough bread/, "must still include the opening topic");
+      assert.match(
+        lastConversationText,
+        /pasta instead/,
+        "must include the SECOND turn's topic too -- this is exactly what was missing before the fix"
+      );
+    });
+
+    await manager.shutdown();
+  }
+
   console.log("\n== title generation disabled via the live isTitleGenerationEnabled gate: automatic trigger skips, but regenerateTitle still works ==");
   {
     const store = await mkStore();
@@ -280,7 +321,7 @@ async function main(): Promise<void> {
       agentFactory: { create: () => new FakeAgentAdapter(30) },
       getDefaultSessionSeed: () => ({ title: "New chat" }),
       getTurnSelectionFallback: () => ({ provider: "anthropic", model: "claude-sonnet-4-6" }),
-      generateTitle: async ({ sessionId, firstUserText }) => `Title for ${sessionId} (${firstUserText})`,
+      generateTitle: async ({ sessionId, conversationText }) => `Title for ${sessionId} (${conversationText})`,
     });
 
     const a = await manager.createSession();
@@ -297,9 +338,14 @@ async function main(): Promise<void> {
         return metaA?.titleGenerationStatus === "success" && metaB?.titleGenerationStatus === "success";
       });
 
+      // Titles are capped to 60 chars by sanitizeGeneratedTitle(), so assert
+      // each starts with its own sessionId (proving no cross-contamination
+      // between A's and B's concurrently-running title generation) rather
+      // than an exact match on the full (longer, truncated) string.
       const [metaA, metaB] = await Promise.all([store.getMeta(a.metadata.id), store.getMeta(b.metadata.id)]);
-      assert.equal(metaA?.title, `Title for ${a.metadata.id} (first turn A)`);
-      assert.equal(metaB?.title, `Title for ${b.metadata.id} (first turn B)`);
+      assert.ok(metaA?.title?.startsWith(`Title for ${a.metadata.id}`), metaA?.title);
+      assert.ok(metaB?.title?.startsWith(`Title for ${b.metadata.id}`), metaB?.title);
+      assert.notEqual(metaA?.title, metaB?.title);
     });
 
     await manager.shutdown();
