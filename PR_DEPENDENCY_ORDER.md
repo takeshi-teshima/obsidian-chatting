@@ -54,9 +54,10 @@ sense relative to its specific base.
 | 30 | [#30](https://github.com/takeshi-teshima/obsidian-chatting/pull/30) | `feat/model-capability-manual-override` ← `feat/session-index-conflict-quarantine` | Quarantine and rebuild the session index when sync-conflict files appear |
 | 31 | [#31](https://github.com/takeshi-teshima/obsidian-chatting/pull/31) | `feat/session-index-conflict-quarantine` ← `fix/session-index-rebuild-guard` | Never let a transient empty rebuild source wipe a known-non-empty session index |
 | 32 | [#32](https://github.com/takeshi-teshima/obsidian-chatting/pull/32) | `fix/session-index-rebuild-guard` ← `fix/image-staleness-and-user-msg-selection` | Fix image attach false-positive staleness on desktop; make user message bubbles selectable |
+| 33 | [#33](https://github.com/takeshi-teshima/obsidian-chatting/pull/33) | `fix/image-staleness-and-user-msg-selection` ← `feat/send-on-enter-per-device` | Configure Send-on-Enter separately per device category (desktop/phone/tablet) |
 
-`fix/image-staleness-and-user-msg-selection` (PR #32's head) is
-`personal/main`'s current tip. Merging #1 through #32 in order is
+`feat/send-on-enter-per-device` (PR #33's head) is
+`personal/main`'s current tip. Merging #1 through #33 in order is
 equivalent to fast-forwarding
 `main` to `personal/main` in one shot.
 
