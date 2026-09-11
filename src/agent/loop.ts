@@ -13,6 +13,7 @@ import { TOOL_DEFINITIONS } from "../tools/registry";
 import { executeTool } from "../tools/executor";
 import { buildContext } from "./context";
 import { buildSystemPrompt, buildContextMessage } from "./system-prompt";
+import { sanitizeToolCallPairing } from "./tool-call-pairing";
 import { SkillService, parseExplicitSkillInvocation } from "../skills/service";
 import { PromptProfileService } from "../profiles/service";
 import type { ContextRef } from "../context/refs";
@@ -116,9 +117,20 @@ export class AgentLoop {
     return this.messages;
   }
 
-  /** Restore API messages from persistence */
+  /**
+   * Restore API messages from persistence.
+   *
+   * Sanitized on the way in: this is the single choke point every session
+   * resume/hydration goes through (SessionRuntime's constructor calls this
+   * immediately after loading a workspace from disk - see
+   * sessions/runtime/runtime.ts), so it's the most general place to repair
+   * any tool_use/tool_result pairing broken by an earlier interruption
+   * (macOS sleep or lost connection mid-turn, a force-quit, a buggy
+   * session migration/import, etc.) before the history is ever replayed to
+   * a provider. See tool-call-pairing.ts for the full rationale.
+   */
   importMessages(messages: UnifiedMessage[]): void {
-    this.messages = messages;
+    this.messages = sanitizeToolCallPairing(messages);
   }
 
   /**
@@ -294,6 +306,22 @@ export class AgentLoop {
     for (let i = 0; i < maxIterations; i++) {
       if (this.aborted) return;
 
+      // Repair any tool_use/tool_result pairing broken since the LAST
+      // iteration too, not just on load/prune (see tool-call-pairing.ts).
+      // This is what actually fixes the case a user hit in practice: the
+      // computer went to sleep while a tool call was in flight (assistant's
+      // tool_use already pushed to `this.messages` at the bottom of the
+      // previous iteration, but the tool never finished executing so its
+      // tool_result never got appended), the SAME live session/AgentLoop
+      // survived the sleep (no reload, no prune - neither of the other two
+      // sanitize call sites ran), and the user just typed a new message
+      // ("Continue") once they came back. Without this call, `this.messages`
+      // still contains that dangling tool_use, and replaying it verbatim on
+      // the very next request is exactly what produces the backend's
+      // "No tool call found for function call output" / equivalent
+      // dangling-call error.
+      this.messages = sanitizeToolCallPairing(this.messages);
+
       callbacks.onThinking();
 
       let response;
@@ -381,10 +409,23 @@ export class AgentLoop {
     );
   }
 
-  /** Drop oldest messages when conversation gets too long, keeping recent context */
+  /**
+   * Drop oldest messages when conversation gets too long, keeping recent
+   * context.
+   *
+   * `slice(-KEEP_RECENT)` is a plain positional cut with no awareness of
+   * tool_use/tool_result pairing. If the cut point falls between a tool_use
+   * message and its tool_result message (extremely likely in any
+   * tool-heavy session, which is exactly when this path triggers), the
+   * retained window keeps an orphaned tool_result whose tool_use got cut
+   * away — precisely the "No tool call found for function call output"
+   * shape the ChatGPT OAuth/Codex and OpenAI backends reject outright.
+   * sanitizeToolCallPairing() repairs that (see its doc comment) before the
+   * pruned history is used for anything else.
+   */
   private pruneHistory(): void {
     if (this.messages.length > MAX_CONVERSATION_LENGTH) {
-      this.messages = this.messages.slice(-KEEP_RECENT);
+      this.messages = sanitizeToolCallPairing(this.messages.slice(-KEEP_RECENT));
     }
   }
 }
