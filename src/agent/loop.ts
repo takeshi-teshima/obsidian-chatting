@@ -306,22 +306,6 @@ export class AgentLoop {
     for (let i = 0; i < maxIterations; i++) {
       if (this.aborted) return;
 
-      // Repair any tool_use/tool_result pairing broken since the LAST
-      // iteration too, not just on load/prune (see tool-call-pairing.ts).
-      // This is what actually fixes the case a user hit in practice: the
-      // computer went to sleep while a tool call was in flight (assistant's
-      // tool_use already pushed to `this.messages` at the bottom of the
-      // previous iteration, but the tool never finished executing so its
-      // tool_result never got appended), the SAME live session/AgentLoop
-      // survived the sleep (no reload, no prune - neither of the other two
-      // sanitize call sites ran), and the user just typed a new message
-      // ("Continue") once they came back. Without this call, `this.messages`
-      // still contains that dangling tool_use, and replaying it verbatim on
-      // the very next request is exactly what produces the backend's
-      // "No tool call found for function call output" / equivalent
-      // dangling-call error.
-      this.messages = sanitizeToolCallPairing(this.messages);
-
       callbacks.onThinking();
 
       let response;
@@ -363,22 +347,22 @@ export class AgentLoop {
         callbacks.onResponse(textParts.join(""));
       }
 
-      // Append assistant message to history
-      this.messages.push({ role: "assistant", content: response.content });
-
-      // If no tool calls, we're done
+      // If no tool calls, this turn is plain text - safe to commit
+      // immediately, there is no call/result pairing to protect.
       if (toolCalls.length === 0) {
+        this.messages.push({ role: "assistant", content: response.content });
         if (textParts.length > 0) {
           callbacks.onResponse(textParts.join(""));
         }
         return;
       }
 
-      // Execute tool calls and collect results
+      // Execute tool calls and collect results. Deliberately do NOT touch
+      // `this.messages` yet - see the commit below for why.
       const resultBlocks: ContentBlock[] = [];
 
       for (const tc of toolCalls) {
-        if (this.aborted) return;
+        if (this.aborted) break;
 
         callbacks.onToolCall(tc.name!, tc.input!);
 
@@ -399,8 +383,50 @@ export class AgentLoop {
         });
       }
 
-      // Append tool results as user message
+      // Any tool call this batch didn't get to (aborted partway through the
+      // loop above) still needs a paired result - see the commit note.
+      for (const tc of toolCalls) {
+        if (!resultBlocks.some((r) => r.tool_use_id === tc.id)) {
+          resultBlocks.push({
+            type: "tool_result",
+            tool_use_id: tc.id,
+            content: "Cancelled before this tool call ran.",
+            is_error: true,
+          });
+        }
+      }
+
+      /**
+       * Commit the assistant's tool_use message and its tool_result message
+       * TOGETHER, in this one synchronous step - never separately.
+       *
+       * This is the actual fix for "No tool call found for function call
+       * output": every provider adapter replays this history as call_id-
+       * paired items (function_call / function_call_output in Responses-API
+       * terms), and a tool_use committed without its result is exactly the
+       * malformed shape the backend rejects. Previously the assistant
+       * message was pushed *before* executing the tools, so any
+       * interruption between that push and the result push (macOS sleep,
+       * lost network, a hung `ask_user` await, a future bug) left a
+       * dangling call sitting in `this.messages` — which then got persisted
+       * and/or replayed on the next turn.
+       *
+       * Committing both together closes that window entirely: whatever
+       * happens during tool execution, `this.messages` (the thing that gets
+       * persisted to disk and replayed to providers) either gains a fully
+       * paired {tool_use, tool_result} turn, or gains nothing at all if
+       * something above throws/hangs before we get here. "This turn simply
+       * didn't happen yet" is the most honest state to leave history in —
+       * no synthetic narrative, no orphaned call, nothing to reconcile on
+       * resume. Fixed 2026-09-11; see also sanitizeToolCallPairing() for
+       * the remaining role of after-the-fact repair (already-corrupted
+       * sessions saved before this fix, and pruneHistory's positional
+       * truncation, which is a different mechanism this doesn't address).
+       */
+      this.messages.push({ role: "assistant", content: response.content });
       this.messages.push({ role: "user", content: resultBlocks });
+
+      if (this.aborted) return;
     }
 
     // If we get here, we hit the iteration limit
