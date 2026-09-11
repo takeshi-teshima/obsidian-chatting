@@ -1,50 +1,43 @@
 /**
  * Repairs tool_use/tool_result pairing in a message history.
  *
- * Background: every provider adapter replays tool_use/tool_result content
- * blocks to the backend as call_id-paired items (`function_call` /
- * `function_call_output` in Responses-API terms — see api/chatgpt-oauth.ts
- * and api/openai.ts). If a turn is interrupted after the assistant's
- * tool_use message has been appended to history but before its matching
- * tool_result is appended (AgentLoop.run() in loop.ts pushes these as two
- * separate steps, with a tool execution `await` in between), the history
- * ends up with a dangling call and no result.
+ * This is deliberately NOT the primary defense against a dangling call
+ * during live execution — that's AgentLoop.run() in loop.ts, which now
+ * commits an assistant's tool_use message and its tool_result message
+ * together in one synchronous step (see the commit comment there), so a
+ * live turn interrupted by anything (macOS sleep, lost network, a hung
+ * `ask_user` await, a future bug) simply never gets partially written to
+ * `this.messages` in the first place. Sanitizing after the fact everywhere
+ * a provider request gets built would paper over that invariant instead of
+ * enforcing it, and would quietly hide a *future* regression that breaks
+ * the invariant again — so this is intentionally NOT called on every
+ * request; only at the two points below, where an already-broken pairing
+ * can legitimately still arrive from outside AgentLoop's own control:
  *
- * This is NOT a rare edge case: closing the laptop lid / macOS App Nap
- * suspending background network activity mid-turn, losing wifi, force-
- * quitting Obsidian, or any bug in a future migration/import path can all
- * produce exactly this shape. When the resulting history is later replayed
- * (e.g. resuming the session and sending "Continue"), the ChatGPT OAuth /
- * Codex backend rejects it outright:
+ *   1. AgentLoop.importMessages() (session hydration): a session saved by
+ *      an older build of this plugin (before the atomic-commit fix), or
+ *      one that reached disk mid-turn through some path outside
+ *      AgentLoop's control (e.g. a hard process kill / power loss, where
+ *      no in-app code runs to maintain any invariant), may already contain
+ *      a dangling tool_use on disk. This is a one-time repair on load, not
+ *      an ongoing tolerance policy.
+ *   2. pruneHistory()'s positional truncation: `slice(-KEEP_RECENT)` has no
+ *      pairing awareness, and can cut a *previously valid* {tool_use,
+ *      tool_result} pair in half. This is a different mechanism from live
+ *      interruption (it only ever produces an orphaned tool_result, since
+ *      slicing removes from the front and a call always precedes its
+ *      result) and isn't addressed by the atomic-commit fix at all, so
+ *      this repair is still load-bearing there.
  *
- *   "No tool call found for function call output with call_id ..."
- *
- * (which can also occur in the mirror-image shape — an orphaned
- * function_call_output whose function_call never made it into history at
- * all, e.g. if a session file was hand-trimmed or partially migrated).
- *
- * Rather than trying to prevent every possible interruption at its source
- * (impossible — sleep/network loss is an ordinary environmental condition,
- * not a bug to "fix away"), this repairs the history unconditionally
- * before it's ever replayed, so a broken pairing can never reach a
- * provider as a malformed request:
- *
- *   - A tool_use block with no matching tool_result anywhere in the
- *     history gets a synthetic error tool_result appended right after it,
- *     explaining that the call was interrupted. This keeps the pairing
- *     valid AND lets the model see why its call didn't complete, instead
- *     of the call silently vanishing on the next turn.
+ * What it does:
  *   - A tool_result block whose tool_use_id has no matching tool_use
- *     anywhere in the history is dropped outright — there is nothing
- *     meaningful to pair it with, and sending it as-is is exactly the
- *     shape the backend rejects.
- *
- * Call this whenever a message history is loaded from persistence
- * (AgentLoop.importMessages) and, as a second line of defense, immediately
- * before building a provider request from live in-memory history — the
- * function is cheap (a couple of linear passes) and idempotent (running it
- * twice is a no-op), so there's no cost to calling it defensively in both
- * places.
+ *     anywhere in the history is dropped — there is nothing meaningful to
+ *     pair it with, and sending it as-is is exactly the shape the backend
+ *     rejects ("No tool call found for function call output with call_id
+ *     ...").
+ *   - A tool_use block with no matching tool_result anywhere in the
+ *     history gets a synthetic error tool_result appended right after it
+ *     (this direction is only reachable via path 1 above, not pruning).
  */
 import type { ContentBlock, UnifiedMessage } from "../types";
 
