@@ -85,6 +85,121 @@ async function ensureParentFolder(app: App, filePath: string): Promise<void> {
   }
 }
 
+// ─── Hidden path support ────────────────────────────────────────────────────
+//
+// Obsidian's Vault API (TFile/TFolder, getFileByPath/getFiles/etc.) silently
+// excludes any path with a "."-prefixed segment (.obsidian, .trash, .git,
+// .chatting, ...) from its index. This is not a "show hidden files" display
+// setting the user can toggle - there is no such setting - it's how the
+// Vault decides what counts as a file/folder in the first place, on both
+// desktop and mobile.
+//
+// The way around it is `app.vault.adapter` (the DataAdapter interface):
+// this is the same low-level, path-based read/write/list API Obsidian
+// itself uses to store plugin settings under .obsidian/plugins/<id>/, and
+// it behaves identically on desktop and mobile (that's its whole purpose -
+// each platform implements the same interface over its own storage). It
+// does no dotfile filtering at all, requires no settings changes, and has
+// no visible effect on the user's file explorer/UI.
+//
+// Below, every read/write/list/search tool falls back to the adapter for
+// paths the Vault API can't see, so agents can transparently work with
+// dotfolders like .chatting/sessions/*.jsonl (including this plugin's own
+// session logs) without the model needing to know any of this.
+
+function hasDotSegment(path: string): boolean {
+  return path.split("/").some((seg) => seg.startsWith("."));
+}
+
+/** Recursively list every file under `folder` via the raw DataAdapter,
+ *  bypassing the Vault's dotfile/dotfolder exclusion entirely. */
+async function adapterListRecursive(app: App, folder: string): Promise<string[]> {
+  const { files, folders } = await app.vault.adapter.list(folder);
+  const nested = await Promise.all(folders.map((f) => adapterListRecursive(app, f)));
+  return [...files, ...nested.flat()];
+}
+
+/** Recursively create a folder chain via the DataAdapter (mkdir isn't
+ *  guaranteed recursive across platforms, so walk it segment by segment). */
+async function ensureFolderChainViaAdapter(app: App, folderPath: string): Promise<void> {
+  const segments = folderPath.split("/").filter(Boolean);
+  let current = "";
+  for (const seg of segments) {
+    current = current ? `${current}/${seg}` : seg;
+    if (!(await app.vault.adapter.exists(current))) {
+      await app.vault.adapter.mkdir(current);
+    }
+  }
+}
+
+/** Same replace_all/find_replace/insert operations as editDocument's
+ *  Vault-API path, reimplemented over the raw DataAdapter for files under a
+ *  dotfolder that the Vault API can't resolve to a TFile. */
+async function editViaAdapter(
+  app: App,
+  path: string,
+  operation: string,
+  content: string,
+  find: string | undefined,
+  position: string | undefined
+): Promise<ToolResult> {
+  if (!(await app.vault.adapter.exists(path))) {
+    return { result: `File not found: ${path}`, isError: true };
+  }
+  const data = await app.vault.adapter.read(path);
+
+  switch (operation) {
+    case "replace_all":
+      await app.vault.adapter.write(path, content);
+      return { result: `Replaced all content in ${path}.`, isError: false };
+
+    case "find_replace": {
+      if (!find) {
+        return { result: "'find' parameter is required for find_replace.", isError: true };
+      }
+      const idx = data.indexOf(find);
+      if (idx === -1) {
+        return {
+          result: "Could not find the specified text. Make sure it matches exactly (including whitespace and line breaks).",
+          isError: true,
+        };
+      }
+      const secondIdx = data.indexOf(find, idx + 1);
+      const resultMsg = secondIdx !== -1 ? "[Note: Multiple matches found, replacing first occurrence.]\n" : "";
+      const next = data.substring(0, idx) + content + data.substring(idx + find.length);
+      await app.vault.adapter.write(path, next);
+      return { result: `${resultMsg}Successfully replaced text in ${path}.`, isError: false };
+    }
+
+    case "insert": {
+      if (!position) {
+        return { result: "'position' parameter is required for insert.", isError: true };
+      }
+      let next: string;
+      switch (position) {
+        case "beginning":
+          next = content + "\n" + data;
+          break;
+        case "end":
+          next = data + "\n" + content;
+          break;
+        case "after_frontmatter": {
+          const fmEnd = findFrontmatterEnd(data);
+          next = fmEnd === -1 ? content + "\n" + data : data.substring(0, fmEnd) + "\n" + content + data.substring(fmEnd);
+          break;
+        }
+        default:
+          return { result: `Unknown position: ${position}`, isError: true };
+      }
+      await app.vault.adapter.write(path, next);
+      return { result: `Inserted content at ${position} of ${path}.`, isError: false };
+    }
+
+    default:
+      return { result: `Unknown operation: ${operation}`, isError: true };
+  }
+}
+
 function findFrontmatterEnd(content: string): number {
   if (!content.startsWith("---")) return -1;
   const secondDash = content.indexOf("---", 3);
@@ -135,6 +250,11 @@ async function editDocument(
   const position = optionalString(input.position);
 
   const path = optionalString(input.path);
+
+  if (path && hasDotSegment(normalizePath(path))) {
+    return await editViaAdapter(app, normalizePath(path), operation, content, find, position);
+  }
+
   const file = resolveFile(app, path);
   if (!file) {
     return { result: path ? `File not found: ${path}` : "No active document open.", isError: true };
@@ -217,29 +337,42 @@ async function searchVault(
 ): Promise<ToolResult> {
   const query = requiredString(input.query).toLowerCase();
   const searchContent = input.searchContent as boolean | undefined;
+  const includeHidden = input.includeHidden === true;
   const limit = Math.min((input.limit as number) || 10, 50);
 
-  const files = app.vault.getMarkdownFiles();
+  // Normal mode stays exactly as before (markdown notes only, via the
+  // Vault's own index). includeHidden switches to a full recursive
+  // DataAdapter walk from vault root, which also reaches dotfolders like
+  // .chatting - see the "Hidden path support" note above.
+  const paths = includeHidden
+    ? await adapterListRecursive(app, "")
+    : app.vault.getMarkdownFiles().map((f) => f.path);
+
   const results: string[] = [];
 
-  for (const file of files) {
+  for (const path of paths) {
     if (results.length >= limit) break;
 
-    if (file.path.toLowerCase().includes(query)) {
-      results.push(`- ${file.path}`);
+    if (path.toLowerCase().includes(query)) {
+      results.push(`- ${path}`);
       continue;
     }
 
     if (searchContent) {
-      // cachedRead() avoids redundant disk reads
-      const content = await app.vault.cachedRead(file);
+      const file = app.vault.getFileByPath(path);
+      // cachedRead() avoids redundant disk reads for tracked files; for
+      // untracked (hidden) paths, fall back to the raw adapter and skip
+      // unreadable (e.g. binary) files rather than failing the whole search.
+      const content = file
+        ? await app.vault.cachedRead(file)
+        : await app.vault.adapter.read(path).catch(() => "");
       const lowerContent = content.toLowerCase();
       const idx = lowerContent.indexOf(query);
       if (idx !== -1) {
         const start = Math.max(0, idx - 50);
         const end = Math.min(content.length, idx + query.length + 50);
         const snippet = content.substring(start, end).replace(/\n/g, " ");
-        results.push(`- ${file.path}: ...${snippet}...`);
+        results.push(`- ${path}: ...${snippet}...`);
       }
     }
   }
@@ -263,13 +396,22 @@ async function readFile(
     return { result: "'path' parameter is required.", isError: true };
   }
 
-  const file = app.vault.getFileByPath(normalizePath(path));
-  if (!file) {
-    return { result: `File not found: ${path}`, isError: true };
+  const normalized = normalizePath(path);
+  const file = app.vault.getFileByPath(normalized);
+  if (file) {
+    const content = await app.vault.cachedRead(file);
+    return { result: content, isError: false };
   }
 
-  const content = await app.vault.cachedRead(file);
-  return { result: content, isError: false };
+  // Not indexed as a TFile - likely under a dotfolder (e.g.
+  // .chatting/sessions/*.jsonl). Fall back to the raw DataAdapter, which
+  // sees it fine (see the "Hidden path support" note above).
+  if (await app.vault.adapter.exists(normalized)) {
+    const content = await app.vault.adapter.read(normalized);
+    return { result: content, isError: false };
+  }
+
+  return { result: `File not found: ${path}`, isError: true };
 }
 
 async function createFile(
@@ -281,6 +423,18 @@ async function createFile(
 
   if (!path) {
     return { result: "'path' parameter is required.", isError: true };
+  }
+
+  if (hasDotSegment(path)) {
+    if (await app.vault.adapter.exists(path)) {
+      return { result: `File already exists: ${path}. Use edit_document to modify it.`, isError: true };
+    }
+    const parentPath = path.substring(0, path.lastIndexOf("/"));
+    if (parentPath) {
+      await ensureFolderChainViaAdapter(app, parentPath);
+    }
+    await app.vault.adapter.write(path, content || "");
+    return { result: `Created ${path}.`, isError: false };
   }
 
   if (app.vault.getFileByPath(path)) {
@@ -298,22 +452,33 @@ async function listFiles(
 ): Promise<ToolResult> {
   const folder = optionalString(input.folder);
   const extension = optionalString(input.extension);
+  const normalizedFolder = folder ? normalizePath(folder) : undefined;
 
-  let files = app.vault.getFiles();
+  // Auto-switch to the DataAdapter (see "Hidden path support" above) when
+  // explicitly asked to (includeHidden) or when the requested folder itself
+  // is a dotfolder the Vault API wouldn't find any files under anyway.
+  const includeHidden =
+    input.includeHidden === true || (normalizedFolder ? hasDotSegment(normalizedFolder) : false);
 
-  if (folder) {
-    const normalizedFolder = normalizePath(folder);
-    files = files.filter((f) =>
-      f.path.startsWith(normalizedFolder + "/") || f.path === normalizedFolder
-    );
+  let paths: string[];
+  if (includeHidden) {
+    paths = await adapterListRecursive(app, normalizedFolder ?? "");
+  } else {
+    let files = app.vault.getFiles();
+    if (normalizedFolder) {
+      files = files.filter((f) =>
+        f.path.startsWith(normalizedFolder + "/") || f.path === normalizedFolder
+      );
+    }
+    paths = files.map((f) => f.path);
   }
 
   if (extension) {
     const ext = extension.startsWith(".") ? extension : `.${extension}`;
-    files = files.filter((f) => f.path.endsWith(ext));
+    paths = paths.filter((p) => p.endsWith(ext));
   }
 
-  const paths = files.map((f) => f.path).sort();
+  paths = paths.sort();
   const capped = paths.slice(0, 100);
   const suffix = paths.length > 100 ? `\n\n(Showing 100 of ${paths.length} files)` : "";
 
