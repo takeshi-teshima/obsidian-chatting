@@ -23,7 +23,7 @@ export const TOOL_DEFINITIONS: UnifiedToolDef[] = [
   {
     name: "edit_document",
     description:
-      "Edit a markdown document. Supports three operations: 'replace_all' replaces the entire content, 'find_replace' finds a specific string and replaces it, 'insert' adds content at a position.",
+      "Edit a markdown document (also works on plain files under dotfolders, e.g. '.chatting/notes.txt'). Supports three operations: 'replace_all' replaces the entire content, 'find_replace' finds a specific string and replaces it, 'insert' adds content at a position.",
     inputSchema: {
       type: "object",
       properties: {
@@ -56,7 +56,7 @@ export const TOOL_DEFINITIONS: UnifiedToolDef[] = [
   {
     name: "search_vault",
     description:
-      "Search for files in the vault by filename or content. Returns matching file paths and snippets.",
+      "Search for files in the vault by filename or content. Returns matching file paths and snippets. By default only searches normal notes (markdown); set includeHidden to also search dotfolders like .chatting (this plugin's own session logs) and non-markdown files.",
     inputSchema: {
       type: "object",
       properties: {
@@ -72,13 +72,17 @@ export const TOOL_DEFINITIONS: UnifiedToolDef[] = [
           type: "number",
           description: "Maximum results to return. Default: 10.",
         },
+        includeHidden: {
+          type: "boolean",
+          description: "Also search dotfolders (e.g. .obsidian, .chatting) and non-markdown files. Default: false.",
+        },
       },
       required: ["query"],
     },
   },
   {
     name: "read_file",
-    description: "Read the full content of any file in the vault by its path.",
+    description: "Read the full content of any file in the vault by its path, including files under dotfolders such as .chatting/sessions/ (this plugin's own session logs) or .obsidian/.",
     inputSchema: {
       type: "object",
       properties: {
@@ -92,7 +96,7 @@ export const TOOL_DEFINITIONS: UnifiedToolDef[] = [
   },
   {
     name: "create_file",
-    description: "Create a new file in the vault. Fails if the file already exists. IMPORTANT: The filename is the title in Obsidian, so never start content with an H1 heading that repeats the filename.",
+    description: "Create a new file in the vault, including under dotfolders (e.g. '.chatting/notes.txt'). Fails if the file already exists. IMPORTANT: The filename is the title in Obsidian, so never start content with an H1 heading that repeats the filename.",
     inputSchema: {
       type: "object",
       properties: {
@@ -110,17 +114,21 @@ export const TOOL_DEFINITIONS: UnifiedToolDef[] = [
   },
   {
     name: "list_files",
-    description: "List files in the vault, optionally filtered by folder and/or extension.",
+    description: "List files in the vault, optionally filtered by folder and/or extension. Automatically includes dotfolder contents (e.g. '.chatting') when 'folder' points inside one; set includeHidden to also surface dotfolders when listing without a folder filter.",
     inputSchema: {
       type: "object",
       properties: {
         folder: {
           type: "string",
-          description: "Folder path to list (e.g. 'Projects'). Omit to list all files.",
+          description: "Folder path to list (e.g. 'Projects' or '.chatting/sessions'). Omit to list all files.",
         },
         extension: {
           type: "string",
           description: "Filter by file extension (e.g. 'md'). Omit to include all types.",
+        },
+        includeHidden: {
+          type: "boolean",
+          description: "Also include dotfolders (e.g. .obsidian, .chatting) when no folder filter is given. Default: false.",
         },
       },
       required: [],
