@@ -14,6 +14,7 @@ import {
   writeCustomCatalog,
   type ModelOption,
 } from "./model-catalog";
+import { getReasoningEffortOptions } from "./model/capabilities";
 
 // Re-exported so existing call sites (src/main.ts, src/ui/chat-view.ts,
 // src/turn-execution/catalog.ts) that `import { getModelOptions, ... } from
@@ -73,24 +74,38 @@ export class ChatSettingTab extends PluginSettingTab {
     this.renderModelSection(containerEl);
 
     // ─── Reasoning effort ───────────────────────────────────────────────
-    new Setting(containerEl)
-      .setName("Default reasoning effort")
-      .setDesc(
-        "Seed value for new conversations only. Unsupported levels are mapped down conservatively per model. Change it per-conversation in the composer's reasoning selector."
-      )
-      .addDropdown((dropdown) =>
-        dropdown
-          .addOption("auto", "Auto (recommended)")
-          .addOption("low", "Low")
-          .addOption("medium", "Medium")
-          .addOption("high", "High")
-          .addOption("max", "Max")
-          .setValue(s.reasoningEffort)
-          .onChange(async (value) => {
+    // Options are driven entirely by the configured provider's capabilities
+    // (see src/model/capabilities.ts's getReasoningEffortOptions /
+    // PROVIDERS_WITH_ADAPTIVE_REASONING): "Auto" only appears for providers
+    // whose backend genuinely has an adaptive reasoning mode (currently just
+    // Anthropic). OpenAI/ChatGPT OAuth never had that backend feature — the
+    // old "auto" option for them was purely a client-side stand-in for
+    // "medium" — so the option itself no longer exists for those providers,
+    // rather than being a value that silently means something else.
+    {
+      const reasoningOptions = getReasoningEffortOptions(s.provider);
+      const currentReasoningValue = reasoningOptions.includes(s.reasoningEffort)
+        ? s.reasoningEffort
+        : reasoningOptions[0];
+      if (currentReasoningValue !== s.reasoningEffort) {
+        s.reasoningEffort = currentReasoningValue;
+        void this.plugin.saveSettings();
+      }
+      new Setting(containerEl)
+        .setName("Default reasoning effort")
+        .setDesc(
+          "Seed value for new conversations only. Unsupported levels are mapped down conservatively per model. Change it per-conversation in the composer's reasoning selector."
+        )
+        .addDropdown((dropdown) => {
+          for (const option of reasoningOptions) {
+            dropdown.addOption(option, describeReasoningEffort(option));
+          }
+          dropdown.setValue(currentReasoningValue).onChange(async (value) => {
             s.reasoningEffort = value as ChatSettings["reasoningEffort"];
             await this.plugin.saveSettings();
-          })
-      );
+          });
+        });
+    }
 
     // ─── Web search ───────────────────────────────────────────────────
     new Setting(containerEl)
@@ -895,4 +910,19 @@ function numberValue(value: unknown): number {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
+}
+
+function describeReasoningEffort(effort: ChatSettings["reasoningEffort"]): string {
+  switch (effort) {
+    case "auto":
+      return "Auto (recommended)";
+    case "low":
+      return "Low";
+    case "medium":
+      return "Medium";
+    case "high":
+      return "High";
+    case "max":
+      return "Max";
+  }
 }

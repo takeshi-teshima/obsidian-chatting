@@ -479,12 +479,7 @@ export class ObsidianChatView extends ItemView {
       getEnabledProviders: () => this.plugin.getEnabledProviders(),
       getProviderLabel: (provider) => this.plugin.getProviderLabel(provider),
       getModels: (provider) => getModelOptions(provider),
-      getReasoningEfforts: (provider, model) => {
-        const capabilities = getModelCapabilities(provider, model);
-        return capabilities.reasoning.supported
-          ? (["auto", "low", "medium", "high", "max"] as const)
-          : [];
-      },
+      getReasoningEfforts: (provider, model) => getModelCapabilities(provider, model).reasoning.uiEfforts,
     };
   }
 

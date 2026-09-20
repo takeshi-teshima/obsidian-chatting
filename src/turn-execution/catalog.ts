@@ -3,21 +3,21 @@ import { getModelCapabilities, type ReasoningEffort } from "../model/capabilitie
 import { getModelOptions } from "../settings";
 import type { TurnModelCatalog, TurnModelOption } from "./types";
 
-const ALL_REASONING_EFFORTS: readonly ReasoningEffort[] = ["auto", "low", "medium", "high", "max"];
-
 export interface ModelCatalogDependencies {
   /** Reuse settings.ts's provider model catalog; do not create a competing one. */
   getModels(provider: Provider): readonly TurnModelOption[];
   getReasoningEfforts(provider: Provider, model: string): readonly ReasoningEffort[];
 }
 
-/** Default dependency wiring: reuses the plugin's existing model catalog + capability resolver. */
+/**
+ * Default dependency wiring: reuses the plugin's existing model catalog + capability
+ * resolver. Which effort values (including whether "auto" is one of them) are offered
+ * is entirely delegated to `ModelCapabilities.reasoning.uiEfforts` — no provider
+ * special-casing here, matching src/ui/chat-view.ts's composerCatalogHost().
+ */
 export const defaultModelCatalogDependencies: ModelCatalogDependencies = {
   getModels: (provider) => getModelOptions(provider),
-  getReasoningEfforts: (provider, model) => {
-    const capabilities = getModelCapabilities(provider, model);
-    return capabilities.reasoning.supported ? ALL_REASONING_EFFORTS : [];
-  },
+  getReasoningEfforts: (provider, model) => getModelCapabilities(provider, model).reasoning.uiEfforts,
 };
 
 export function buildTurnModelCatalog(
